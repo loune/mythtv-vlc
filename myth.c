@@ -153,7 +153,9 @@ static int myth_ReadCommand( vlc_object_t *p_access, access_sys_t *p_sys, int fd
 	/* read length */
 	char lenstr[9];
 	memset(lenstr, '\0', sizeof(lenstr));
-	net_Read( p_access, fd, NULL, lenstr, 8, false );
+	int i_Read = 0;
+	while (i_Read != 8)
+		i_Read = net_Read( p_access, fd, NULL, lenstr + i_Read, 8, false ); // TODO this looks wrong? should be += and len - 8 ???
 	int len = atoi(lenstr);
     //msg_Info( p_access, "myth_ReadCommand-len:\"%d\"", len);
 
@@ -161,7 +163,9 @@ static int myth_ReadCommand( vlc_object_t *p_access, access_sys_t *p_sys, int fd
 	psz_line = malloc(len+1);
 	psz_line[len] = '\0';
 
-	net_Read( p_access, fd, NULL, psz_line, len, false );
+	i_Read = 0;
+	while (i_Read != len)
+		i_Read = net_Read( p_access, fd, NULL, psz_line + i_Read, len, false ); // TODO this looks wrong? should be += and len - i_Read ???
 
     msg_Info( p_access, "myth_ReadCommand:\"%s%s\"", lenstr, psz_line);
 
@@ -467,7 +471,7 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 		//myth_ReadCommand( p_access, p_sys, p_sys->fd_cmd, &i_plen, &psz_params );
 
 		//i_dlen = atoi( myth_token(psz_params, i_plen, 0) );
-		i_dlen = i_len;
+		i_dlen = 32767;
 
 		if (i_dlen == -1)
 			return 0;
