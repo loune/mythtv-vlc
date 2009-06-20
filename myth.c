@@ -1,8 +1,8 @@
 /*****************************************************************************
- * myth.c: Myth Protocol input module for VLC 0.9.8
+ * myth.c: Myth Protocol input module
  *****************************************************************************
  * Copyright (C) 2001-2006 the VideoLAN team
- * Copyright (C) 2008 Loune Lam
+ * Copyright (C) 2009 Loune Lam
  * $Id$
  *
  * Authors: Loune Lam <lpgcritter@nasquan.com>
@@ -40,7 +40,8 @@
 #include <vlc_interface.h>
 
 #include <vlc_network.h>
-#include "vlc_url.h"
+#include <vlc_services_discovery.h>
+#include <vlc_url.h>
 
 #define IPPORT_MYTH 6543u
 
@@ -313,8 +314,8 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
     if( fd == -1 )
     {
         msg_Err( p_access, "connection failed" );
-        intf_UserFatal( p_access, false, _("Network interaction failed"),
-                        _("VLC could not connect with the given server.") );
+        //intf_UserFatal( p_access, false, _("Network interaction failed"),
+        //                _("VLC could not connect with the given server.") );
         return 0;
     }
     msg_Dbg( p_access, "Connected" );
@@ -387,7 +388,7 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
 
 static void ManglePlaylist( access_t *p_access, access_sys_t *p_sys, char *psz_params, int i_len ) {
 
-		playlist_t *p_playlist = pl_Yield( p_access );
+		playlist_t *p_playlist = pl_Hold( p_access );
 		
 		input_thread_t *p_input = vlc_object_find( p_access, VLC_OBJECT_INPUT, FIND_PARENT );
 		if( !p_input )
@@ -400,7 +401,7 @@ static void ManglePlaylist( access_t *p_access, access_sys_t *p_sys, char *psz_p
 		playlist_item_t    *p_current;
 
 		vlc_mutex_lock( &input_GetItem(p_input)->lock );
-		p_current = playlist_ItemGetByInput( p_playlist, input_GetItem( p_input ), pl_Unlocked );
+		p_current = playlist_ItemGetByInput( p_playlist, input_GetItem( p_input ) );
 		vlc_mutex_unlock( &input_GetItem(p_input)->lock );
 
 		if( !p_current )
@@ -412,8 +413,8 @@ static void ManglePlaylist( access_t *p_access, access_sys_t *p_sys, char *psz_p
 		}
 
 		//p_current->p_input->i_type = ITEM_TYPE_DIRECTORY;
-		p_item_in_category = playlist_ItemToNode( p_playlist, p_current,
-												  pl_Unlocked );
+		//p_item_in_category = playlist_ItemToNode( p_playlist, p_current,
+		//										  pl_Unlocked );
 			msg_Err( p_access, "PLAYLIST %d", p_playlist->i_current_index );
 
 		bool addToPlayList = p_playlist->i_current_index == 0;
@@ -446,7 +447,7 @@ static void ManglePlaylist( access_t *p_access, access_sys_t *p_sys, char *psz_p
 					char *psz_name;
 					asprintf( &psz_name, "%s: %s", psz_ctitle, psz_csubtitle );
 					p_item = input_item_NewWithType( VLC_OBJECT( p_playlist ),
-													strdup(psz_url), psz_name, 0, NULL,
+													strdup(psz_url), psz_name, 0, NULL, 0,
 													 -1, ITEM_TYPE_FILE );
 					input_item_SetDescription( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 2 )) );
 					
@@ -474,7 +475,7 @@ static void ManglePlaylist( access_t *p_access, access_sys_t *p_sys, char *psz_p
                                            PLAYLIST_NO_REBUILD,
                                            PLAYLIST_END, true,
                                            pl_Unlocked );
-                    vlc_gc_decref( p_input );
+                    //vlc_gc_decref( p_input );
 				}
 			
 		}
@@ -482,7 +483,7 @@ static void ManglePlaylist( access_t *p_access, access_sys_t *p_sys, char *psz_p
 		if (addToPlayList) {
 			//p_playlist->b_reset_currently_playing = true;
 			var_SetBool( p_playlist, "intf-change", true );
-			playlist_Signal( p_playlist );
+			//playlist_Signal( p_playlist );
 		}
 
 		free( psz_params );
@@ -865,12 +866,12 @@ static int Control( access_t *p_access, int i_query, va_list args )
             *pb_bool = true;    /* FIXME */
             break;
 
-        /* */
+        /* 
         case ACCESS_GET_MTU:
             pi_int = (int*)va_arg( args, int * );
             *pi_int = 0;
             break;
-
+*/
         case ACCESS_GET_PTS_DELAY:
             pi_64 = (int64_t*)va_arg( args, int64_t * );
             var_Get( p_access, "myth-caching", &val );
@@ -1063,11 +1064,11 @@ static int SDOpen( vlc_object_t *p_this )
     p_sys->pp_input = NULL;
     p_sys->b_update = true;
 
-    p_sd->pf_run = SDRun;
+    //p_sd->pf_run = SDRun;
     p_sd->p_sys  = p_sys;
 
     /* Give us a name */
-    services_discovery_SetLocalizedName( p_sd, _("MythTV") );
+    //services_discovery_SetLocalizedName( p_sd, _("MythTV") );
 
     var_Create( p_sd, "mythbackend-url", VLC_VAR_STRING | VLC_VAR_DOINHERIT );
 
@@ -1086,7 +1087,7 @@ static void SDClose( vlc_object_t *p_this )
     {
         if( p_sd->p_sys->pp_input[i] )
         {
-            input_StopThread( p_sd->p_sys->pp_input[i] );
+            //input_StopThread( p_sd->p_sys->pp_input[i] );
             vlc_object_release( p_sd->p_sys->pp_input[i] );
             p_sd->p_sys->pp_input[i] = NULL;
         }
@@ -1108,7 +1109,7 @@ static void SDRun( services_discovery_t *p_sd )
 
 	if (!psz_backendurl) {
 		input_item_t *p_item = input_item_NewWithType( p_sd,
-			strdup("mythnotavailable://localhost/"), strdup("Please set your Mythbackend URL in the preferences (Show All, under Input > Access Modules > MythTV)"), 0, NULL, -1, ITEM_TYPE_FILE );
+			strdup("mythnotavailable://localhost/"), strdup("Please set your Mythbackend URL in the preferences (Show All, under Input > Access Modules > MythTV)"), 0, NULL, 0, -1, ITEM_TYPE_FILE );
 		services_discovery_AddItem( p_sd, p_item, NULL );
 		vlc_gc_decref( p_item );
 
@@ -1146,7 +1147,7 @@ static void SDRun( services_discovery_t *p_sd )
 		char *psz_name;
 		asprintf( &psz_name, "%s: %s", psz_ctitle, psz_csubtitle );
 		p_item = input_item_NewWithType( p_sd,
-			strdup(psz_url), psz_name, 0, NULL,
+			strdup(psz_url), psz_name, 0, NULL, 0,
 										 -1, ITEM_TYPE_FILE );
 		
 		input_item_SetDescription( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 2 )) );
