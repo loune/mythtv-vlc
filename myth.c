@@ -59,6 +59,8 @@ static void SDClose( vlc_object_t * );
     "Caching value for MythTV streams. This " \
     "value should be set in milliseconds." )
 
+#define MYTH_MINIMUM_VER 56
+
 #define SERVER_URL_TEXT N_("MythTV Backend Server URL")
 #define SERVER_URL_LONGTEXT N_("Enter the URL of myth backend starting with eg. myth://localhost/")
 
@@ -66,7 +68,7 @@ VLC_SD_PROBE_HELPER("access_myth", "MythTV Library", SD_CAT_LAN)
 
 vlc_module_begin()
     set_shortname( "MythTV" )
-    set_description( N_("MYTH protocol input") )
+    set_description( N_("MythTV VLC Plugin") )
     set_capability( "access", 0 )
     set_category( CAT_INPUT )
     set_subcategory( SUBCAT_INPUT_ACCESS )
@@ -205,6 +207,8 @@ static int myth_WriteCommand( vlc_object_t *p_access, void *p_sys, int fd,
 
     va_end( args );
     
+    assert( fd != -1 );
+
     int len = strlen(psz_cmd);
 
     char lenstr[9];
@@ -222,6 +226,7 @@ static int myth_WriteCommand( vlc_object_t *p_access, void *p_sys, int fd,
     }
     return VLC_SUCCESS;
 }
+
 static int myth_ReadCommand( vlc_object_t *p_access, void *p_sys, int fd, 
                             int *pi_len, char **ppsz_answer )
 {
@@ -230,6 +235,9 @@ static int myth_ReadCommand( vlc_object_t *p_access, void *p_sys, int fd,
     memset(lenstr, '\0', sizeof(lenstr));
     int i_Read = 0;
     int i_TotalRead = 0;
+
+    assert( fd != -1 );
+
     while (i_TotalRead < 8) {
         if ((i_Read = net_Read( p_access, fd, NULL, lenstr + i_TotalRead, 8 - i_TotalRead, false )) <= 0)
             goto exit_error;
@@ -313,88 +321,116 @@ static int myth_count_tokens( char *psz_params, int i_len ) {
 
 static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* url, bool b_fd_data )
 {
-    int protocol_version = 23056;
-    
     char *psz_params;
     int i_len;
-
-    msg_Dbg( p_access, "Connecting to %s:%d...", url->psz_host, url->i_port );
+	
+	for ( int i = 0; i < 2; i++ )
+	{
+		msg_Dbg( p_access, "Connecting to %s:%d...", url->psz_host, url->i_port );
     
-    int fd = net_ConnectTCP( p_access, url->psz_host, url->i_port );
-    if( fd == -1 )
-    {
-        msg_Err( p_access, "connection failed" );
-        //intf_UserFatal( p_access, false, _("Network interaction failed"),
-        //                _("VLC could not connect with the given server.") );
-        return 0;
-    }
-    msg_Dbg( p_access, "Connected" );
+		int fd = net_ConnectTCP( p_access, url->psz_host, url->i_port );
+		if( fd == -1 )
+		{
+			msg_Err( p_access, "Connection failed" );
+			//intf_UserFatal( p_access, false, _("Network interaction failed"),
+			//                _("VLC could not connect with the given server.") );
+			return 0;
+		}
 
-    if( net_GetPeerAddress( fd, p_sys->sz_remote_ip, NULL ) || 
-        net_GetSockAddress( fd, p_sys->sz_local_ip, NULL ) )
-    {
-        net_Close( fd );
-        return 0;
-    }
+		msg_Dbg( p_access, "Connected" );
 
-    if( myth_WriteCommand( p_access, p_sys, fd, "MYTH_PROTO_VERSION %d", protocol_version ) < 0 )
-    {
-        msg_Err( p_access, "failed to introduce ourselves" );
-        net_Close( fd );
-        return 0;
-    }
+		if( net_GetPeerAddress( fd, p_sys->sz_remote_ip, NULL ) || 
+			net_GetSockAddress( fd, p_sys->sz_local_ip, NULL ) )
+		{
+			net_Close( fd );
+			return 0;
+		}
 
-    myth_ReadCommand( p_access, p_sys, fd, &i_len, &psz_params );
+		if( myth_WriteCommand( p_access, p_sys, fd, "MYTH_PROTO_VERSION %d", p_sys->myth_proto_version ) < 0 )
+		{
+			msg_Err( p_access, "failed to introduce ourselves" );
+			net_Close( fd );
+			return 0;
+		}
+
+		myth_ReadCommand( p_access, p_sys, fd, &i_len, &psz_params );
     
-    char *acceptreject = myth_token(psz_params, i_len, 0);
+		char *acceptreject = myth_token(psz_params, i_len, 0);
 
-    if ( !strncmp(acceptreject, "ACCEPT", 6) ) {
-        p_sys->myth_proto_version = atoi( myth_token( psz_params, i_len, 1 ) );
-        msg_Info( p_access, "MythBackend is Protocol Version %d", p_sys->myth_proto_version);
+		if ( !strncmp(acceptreject, "ACCEPT", 6) )
+		{
+			p_sys->myth_proto_version = atoi( myth_token( psz_params, i_len, 1 ) );
+			msg_Info( p_access, "MythBackend is Protocol Version %d", p_sys->myth_proto_version);
 
-    } else {
-        msg_Err( p_access, "MythBackend Protocol mismatch, server is %s, we are %d", myth_token(psz_params, i_len, 1), protocol_version );
-        net_Close( fd );
-        free( psz_params );
-        return 0;
-    }
+		}
+		else
+		{
+			msg_Err( p_access, "MythBackend Protocol mismatch, server is %s, we are expecting %d", myth_token(psz_params, i_len, 1), p_sys->myth_proto_version );
+			
+			int i_server_ver = atoi( myth_token( psz_params, i_len, 1 ) );
+			net_Close( fd );
+			free( psz_params );
 
-    free( psz_params );
+			if ( i_server_ver >= MYTH_MINIMUM_VER )
+			{
+				// let's try reconnecting with specified version.
+				msg_Info( p_access, "Changing version to %d", i_server_ver );
+				p_sys->myth_proto_version = i_server_ver;
+				continue;
+			}
+			else
+			{
+				break;
+			}
 
-    if (b_fd_data) {
-        myth_WriteCommand( p_access, p_sys, fd, "ANN FileTransfer VLC_%s[]:[]myth://%s:%d/%s[]:[]Default", p_sys->sz_local_ip, url->psz_host, url->i_port, url->psz_path );
-        myth_ReadCommand( p_access, p_sys, fd, &i_len, &psz_params );
-        acceptreject = myth_token(psz_params, i_len, 0);
-        if ( !strncmp( acceptreject, "OK", 2) ) {
-            ((access_t*)p_access)->info.i_size = MAKEINT64( atoi( myth_token(psz_params, i_len, 3)), atoi( myth_token(psz_params, i_len, 2)));
-            msg_Info( p_access, "Stream starting %"PRId64" B", ((access_t*)p_access)->info.i_size );
-        } else {
-            msg_Err( p_access, "Some error occured while trying to stream" );
-            net_Close( fd );
-            free( psz_params );
-            return 0;
-        }
-        strncpy(p_sys->file_transfer_id, myth_token(psz_params, i_len, 1), sizeof(p_sys->file_transfer_id)-1);
-        p_sys->file_transfer_id[sizeof(p_sys->file_transfer_id)-1] = '\0';
-        free( psz_params );
-    }
-	else {
-        myth_WriteCommand( p_access, p_sys, fd, "ANN Playback VLC_%s 0", p_sys->sz_local_ip);
-        myth_ReadCommand( p_access, p_sys, fd, &i_len, &psz_params );
-        acceptreject = myth_token(psz_params, i_len, 0);
-        if ( strncmp( acceptreject, "OK", 2 ) ) {
-            msg_Err( p_access, "Some error occured while announcing" );
-            net_Close( fd );
-            free( psz_params );
-            return 0;
-        }
-        free( psz_params );
+		}
 
-    }
+		free( psz_params );
+
+		if ( b_fd_data )
+		{
+			myth_WriteCommand( p_access, p_sys, fd, "ANN FileTransfer VLC_%s[]:[]myth://%s:%d/%s[]:[]Default", p_sys->sz_local_ip, url->psz_host, url->i_port, url->psz_path );
+			myth_ReadCommand( p_access, p_sys, fd, &i_len, &psz_params );
+			acceptreject = myth_token(psz_params, i_len, 0);
+			if ( !strncmp( acceptreject, "OK", 2) )
+			{
+				((access_t*)p_access)->info.i_size = MAKEINT64( atoi( myth_token(psz_params, i_len, 3)), atoi( myth_token(psz_params, i_len, 2)));
+				msg_Info( p_access, "Stream starting %"PRId64" B", ((access_t*)p_access)->info.i_size );
+			}
+			else
+			{
+				msg_Err( p_access, "Some error occured while trying to stream" );
+				net_Close( fd );
+				free( psz_params );
+				return 0;
+			}
+
+			strncpy(p_sys->file_transfer_id, myth_token(psz_params, i_len, 1), sizeof(p_sys->file_transfer_id)-1);
+			p_sys->file_transfer_id[sizeof(p_sys->file_transfer_id)-1] = '\0';
+			free( psz_params );
+		}
+		else
+		{
+			myth_WriteCommand( p_access, p_sys, fd, "ANN Playback VLC_%s 0", p_sys->sz_local_ip);
+			myth_ReadCommand( p_access, p_sys, fd, &i_len, &psz_params );
+			acceptreject = myth_token(psz_params, i_len, 0);
+			if ( strncmp( acceptreject, "OK", 2 ) )
+			{
+				msg_Err( p_access, "Some error occured while announcing" );
+				net_Close( fd );
+				free( psz_params );
+				return 0;
+			}
+
+			free( psz_params );
+
+		}
     
 
-    return fd;
+		return fd;
+	}
 
+	return 0;
 }
 
 
@@ -475,7 +511,7 @@ static int ConnectFD( vlc_object_t *p_access, access_sys_t *p_sys, bool b_fd_dat
 
                 input_item_SetDescription( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 2 )) );
                 
-                GetCutList( p_access, p_sys, myth_token( psz_params, i_len, 1 + i * i_fields + 4 ), myth_token( psz_params, i_len, 1 + i * i_fields + 26 ) );
+                GetCutList( (access_t *) p_access, p_sys, myth_token( psz_params, i_len, 1 + i * i_fields + 4 ), myth_token( psz_params, i_len, 1 + i * i_fields + 26 ) );
                 
                 break;
             }
@@ -512,18 +548,12 @@ static int parseURL( vlc_url_t *url, const char *path )
     if( url->i_port <= 0 )
         url->i_port = IPPORT_MYTH; /* default port */
 
-    /* FTP URLs are relative to user's default directory (RFC1738)
-    For absolute path use ftp://foo.bar//usr/local/etc/filename */
-
-    if( url->psz_path && *url->psz_path == '/' )
-        url->psz_path++;
-
     return VLC_SUCCESS;
 }
 
 
 /****************************************************************************
- * Open: connect to ftp server and ask for file
+ * Open: connect to mythbackend
  ****************************************************************************/
 static int InOpen( vlc_object_t *p_this )
 {
@@ -532,10 +562,11 @@ static int InOpen( vlc_object_t *p_this )
 
     /* Init p_access */
     STANDARD_READ_ACCESS_INIT
+    p_sys->fd_cmd = -1;
     p_sys->fd_data = -1;
     p_sys->i_data_to_be_read = 0;
     p_sys->i_filesize_last_updated = mdate();
-    p_sys->realpos = -1;
+    p_sys->myth.myth_proto_version = MYTH_MINIMUM_VER;
 
     p_sys->i_titles = 0;
 
@@ -557,23 +588,24 @@ static int InOpen( vlc_object_t *p_this )
     return VLC_SUCCESS;
 
 exit_error:
-    vlc_UrlClean( &p_sys->url );
-    free( p_sys );
+	InClose( p_access );
+
     return VLC_EGENERIC;
 }
 
 
 /*****************************************************************************
- * Close: free unused data structures
+ * Close: free now unused data structures
  *****************************************************************************/
 static void Close( vlc_object_t *p_access, access_sys_t *p_sys )
 {
-
-
     msg_Info( p_access, "stopping stream" );
+	
+	if ( p_sys->fd_data != -1 )
+		net_Close( p_sys->fd_data );
 
-    net_Close( p_sys->fd_cmd );
-    net_Close( p_sys->fd_data );
+    if ( p_sys->fd_cmd != -1 )
+		net_Close( p_sys->fd_cmd );
 
     /* free memory */
     vlc_UrlClean( &p_sys->url );
@@ -641,9 +673,8 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 
     int i_requestlen = 65536;
 
-    if (p_sys->i_data_to_be_read <= 30000)
+    if (p_sys->i_data_to_be_read <= i_requestlen / 2)
 	{
-
         msg_Dbg( p_access, "REQUEST_BLOCK %ld", i_requestlen );
         myth_WriteCommand( p_access, p_sys, p_sys->fd_cmd, "QUERY_FILETRANSFER %s[]:[]REQUEST_BLOCK[]:[]%d", p_sys->myth.file_transfer_id, i_requestlen );
         myth_ReadCommand( p_access, p_sys, p_sys->fd_cmd, &i_plen, &psz_params );
@@ -657,11 +688,11 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 
         p_sys->i_data_to_be_read += i_will_receive;
         
-        if (mdate() - p_sys->i_filesize_last_updated > 3000000)
+        if (mdate() - p_sys->i_filesize_last_updated > 2000000)
 		{
-            
+            // update the file size every 2 seconds
             p_sys->i_filesize_last_updated = mdate();
-            // update the file size
+
             myth_WriteCommand( p_access, p_sys, p_sys->fd_cmd, "QUERY_RECORDING BASENAME %s", p_sys->psz_basename );
             myth_ReadCommand( p_access, p_sys, p_sys->fd_cmd, &i_plen, &psz_params );
 
@@ -690,8 +721,7 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
         p_access->info.i_pos += i_read;
         p_sys->i_data_to_be_read -= i_read;
         msg_Dbg( p_access, "i_data_to_be_read %ld", p_sys->i_data_to_be_read );
-        //msg_Info( p_access, "%ld", p_access->info.i_pos );
-        
+
         /* update seekpoint to reflect the current position */
         if ( p_sys->i_titles > 0 )
 		{
@@ -965,8 +995,8 @@ static int SDOpen( vlc_object_t *p_this )
     vlc_mutex_init( &p_sys->lock );
     vlc_cond_init( &p_sys->wait );
     p_sys->b_update = true;
-
-    //p_sd->pf_run = SDRun;
+	
+    p_sys->myth.myth_proto_version = MYTH_MINIMUM_VER;
     p_sd->p_sys  = p_sys;
 
     /* Give us a name */
