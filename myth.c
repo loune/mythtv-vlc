@@ -102,7 +102,7 @@ static ssize_t Read( access_t *, uint8_t *, size_t );
 static int Seek( access_t *, int64_t );
 static int Control( access_t *, int, va_list );
 
-static void SDRun( void *data );
+static void *SDRun( void *data );
 
 static void GetCutList( access_t *, access_sys_t *, char*, char* );
 
@@ -145,9 +145,10 @@ struct access_sys_t
     int        i_data_to_be_read;
     mtime_t    i_filesize_last_updated;
     char      *psz_basename;
+	bool       b_eofing;
 
     int64_t    realpos;
-    
+
     int           i_titles;
     input_title_t **titles;
 };
@@ -247,6 +248,8 @@ static int myth_ReadCommand( vlc_object_t *p_access, void *p_sys, int fd,
     //msg_Info( p_access, "myth_ReadCommand-len:\"%d\"", len);
 
     char *psz_line = malloc(len+1);
+	if ( !psz_line )
+		return VLC_ENOMEM;
     psz_line[len] = '\0';
 
     i_TotalRead = 0;
@@ -451,17 +454,17 @@ static int ConnectFD( vlc_object_t *p_access, access_sys_t *p_sys, bool b_fd_dat
     } else {
         p_sys->fd_cmd = fd;
 
-        myth_WriteCommand( p_access, p_sys, fd, "QUERY_RECORDINGS Play" );
-        myth_ReadCommand( p_access, p_sys, fd, &i_len, &psz_params );
-        
         input_thread_t *p_input = vlc_object_find( p_access, VLC_OBJECT_INPUT, FIND_PARENT );
         if( !p_input )
         {
-            msg_Err( p_access, "unable to find input (internal error)" );
+            msg_Info( p_access, "Unable to find input. Access may not be from video." );
             //pl_Release( p_access );
-            return VLC_ENOOBJ;
+            return VLC_SUCCESS;
         }
 
+        myth_WriteCommand( p_access, p_sys, fd, "QUERY_RECORDINGS Play" );
+        myth_ReadCommand( p_access, p_sys, fd, &i_len, &psz_params );
+        
         /* Set meta data */
         int i_tokens = myth_count_tokens( psz_params, i_len );
         int i_rows = atoi( myth_token(psz_params, i_len, 0) );
@@ -524,7 +527,7 @@ static int ConnectFD( vlc_object_t *p_access, access_sys_t *p_sys, bool b_fd_dat
     }
     
 
-    return 0;
+    return VLC_SUCCESS;
 }
 
 
@@ -548,6 +551,9 @@ static int parseURL( vlc_url_t *url, const char *path )
     if( url->i_port <= 0 )
         url->i_port = IPPORT_MYTH; /* default port */
 
+	if( url->psz_path != NULL && url->psz_path[0] == '/' )
+		url->psz_path++;
+
     return VLC_SUCCESS;
 }
 
@@ -565,7 +571,8 @@ static int InOpen( vlc_object_t *p_this )
     p_sys->fd_cmd = -1;
     p_sys->fd_data = -1;
     p_sys->i_data_to_be_read = 0;
-    p_sys->i_filesize_last_updated = mdate();
+    p_sys->i_filesize_last_updated = 0;
+    p_sys->b_eofing = false;
     p_sys->myth.myth_proto_version = MYTH_MINIMUM_VER;
 
     p_sys->i_titles = 0;
@@ -588,7 +595,7 @@ static int InOpen( vlc_object_t *p_this )
     return VLC_SUCCESS;
 
 exit_error:
-	InClose( p_access );
+	InClose( p_this );
 
     return VLC_EGENERIC;
 }
@@ -630,8 +637,8 @@ static int _Seek( vlc_object_t *p_access, access_sys_t *p_sys, int64_t i_pos )
 
     char *psz_params;
     int i_plen;
-    myth_WriteCommand( (access_t *) p_access, p_sys, p_sys->fd_cmd, "QUERY_FILETRANSFER %s[]:[]SEEK[]:[]%d[]:[]%d[]:[]0[]:[]0[]:[]0", p_sys->myth.file_transfer_id, (int32_t)(i_pos >> 32), (int32_t)(i_pos));
-    myth_ReadCommand( (access_t *) p_access, p_sys, p_sys->fd_cmd, &i_plen, &psz_params );
+    myth_WriteCommand( p_access, p_sys, p_sys->fd_cmd, "QUERY_FILETRANSFER %s[]:[]SEEK[]:[]%d[]:[]%d[]:[]0[]:[]0[]:[]0", p_sys->myth.file_transfer_id, (int32_t)(i_pos >> 32), (int32_t)(i_pos));
+    myth_ReadCommand( p_access, p_sys, p_sys->fd_cmd, &i_plen, &psz_params );
 
     return VLC_SUCCESS;
 }
@@ -643,6 +650,7 @@ static int Seek( access_t *p_access, int64_t i_pos )
     if( val )
         return val;
 
+    p_sys->b_eofing = false;
     p_access->info.b_eof = false;
     p_access->info.i_pos = i_pos;
 
@@ -655,8 +663,14 @@ static int Seek( access_t *p_access, int64_t i_pos )
  *****************************************************************************/
 static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 {
-    access_sys_t *p_sys = p_access->p_sys;
     int i_read;
+    int i_will_receive = 0;
+    int i_requestlen = 65536;
+
+	int i_plen;
+    char *psz_params;
+
+    access_sys_t *p_sys = p_access->p_sys;
 
     assert( p_sys->fd_data != -1 );
     assert( p_sys->fd_cmd != -1 );
@@ -664,63 +678,68 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
     if( p_access->info.b_eof )
         return 0;
 
-    char *psz_params;
-    int i_plen;
+    msg_Dbg( p_access, "Read %d", i_len );
 
-    int i_will_receive = 0;
-
-    msg_Dbg( p_access, "Read %ld", i_len );
-
-    int i_requestlen = 65536;
-
-    if (p_sys->i_data_to_be_read <= i_requestlen / 2)
+	/* pipeline reading, request new data when our buffer is half finished */
+	if ( !p_sys->b_eofing && p_sys->i_data_to_be_read <= i_requestlen / 2 )
 	{
-        msg_Dbg( p_access, "REQUEST_BLOCK %ld", i_requestlen );
-        myth_WriteCommand( p_access, p_sys, p_sys->fd_cmd, "QUERY_FILETRANSFER %s[]:[]REQUEST_BLOCK[]:[]%d", p_sys->myth.file_transfer_id, i_requestlen );
-        myth_ReadCommand( p_access, p_sys, p_sys->fd_cmd, &i_plen, &psz_params );
-        i_will_receive = atoi( myth_token(psz_params, i_plen, 0) );
+		msg_Dbg( p_access, "REQUEST_BLOCK %d", i_requestlen );
+		myth_WriteCommand( VLC_OBJECT( p_access ), p_sys, p_sys->fd_cmd, "QUERY_FILETRANSFER %s[]:[]REQUEST_BLOCK[]:[]%d", p_sys->myth.file_transfer_id, i_requestlen );
+		myth_ReadCommand( VLC_OBJECT( p_access ), p_sys, p_sys->fd_cmd, &i_plen, &psz_params );
+		i_will_receive = atoi( myth_token(psz_params, i_plen, 0) );
 
-        msg_Dbg( p_access, "i_will_receive %ld", i_will_receive );
-        if (i_will_receive == -1)
+		msg_Dbg( p_access, "i_will_receive %d", i_will_receive );
+		if ( i_will_receive <= 0 )
 		{
-            return 0;
-        }
-
-        p_sys->i_data_to_be_read += i_will_receive;
-        
-        if (mdate() - p_sys->i_filesize_last_updated > 2000000)
+			msg_Dbg( p_access, "SET EOF A" );
+			p_sys->b_eofing = true;
+		}
+		else
 		{
-            // update the file size every 2 seconds
-            p_sys->i_filesize_last_updated = mdate();
+			p_sys->i_data_to_be_read += i_will_receive;
+		}
+	}
 
-            myth_WriteCommand( p_access, p_sys, p_sys->fd_cmd, "QUERY_RECORDING BASENAME %s", p_sys->psz_basename );
-            myth_ReadCommand( p_access, p_sys, p_sys->fd_cmd, &i_plen, &psz_params );
+	/* check if last block now read */
+	if ( p_sys->b_eofing && p_sys->i_data_to_be_read == 0 )
+	{
+		msg_Dbg( p_access, "SET EOF B" );
+		p_access->info.b_eof = true;
+		return 0;
+	}
 
-            int64_t i_newsize = MAKEINT64( atoi( myth_token( psz_params, i_plen, 1 + 10 ) ), atoi( myth_token( psz_params, i_plen, 1 + 9 )) );
+    if ( p_sys->psz_basename && mdate() - p_sys->i_filesize_last_updated > 2000000 )
+	{
+        // update the file size every 2 seconds
+        p_sys->i_filesize_last_updated = mdate();
 
-            if (p_access->info.i_size != i_newsize)
-			{
-                p_access->info.i_size = i_newsize;
-                p_access->info.i_update |= INPUT_UPDATE_SIZE;
-                msg_Dbg( p_access, "new file size %"PRId64, i_newsize );
-            }
+        myth_WriteCommand( VLC_OBJECT( p_access ), p_sys, p_sys->fd_cmd, "QUERY_RECORDING BASENAME %s", p_sys->psz_basename );
+        myth_ReadCommand( VLC_OBJECT( p_access ), p_sys, p_sys->fd_cmd, &i_plen, &psz_params );
+
+        int64_t i_newsize = MAKEINT64( atoi( myth_token( psz_params, i_plen, 1 + 10 ) ), atoi( myth_token( psz_params, i_plen, 1 + 9 )) );
+
+        if ( p_access->info.i_size != i_newsize )
+		{
+            p_access->info.i_size = i_newsize;
+            p_access->info.i_update |= INPUT_UPDATE_SIZE;
+            msg_Dbg( p_access, "new file size %"PRId64, i_newsize );
         }
     }
 
     i_read = net_Read( p_access, p_sys->fd_data, NULL, p_buffer, i_len, false );
     
-    msg_Dbg( p_access, "i_read %ld", i_read );
+    msg_Dbg( p_access, "i_read %d", i_read );
 
     if( i_read <= 0 )
 	{
-        msg_Dbg( p_access, "SET EOF" );
+        msg_Dbg( p_access, "SET EOF C" );
         p_access->info.b_eof = true;
     }
     else
 	{
         p_access->info.i_pos += i_read;
         p_sys->i_data_to_be_read -= i_read;
-        msg_Dbg( p_access, "i_data_to_be_read %ld", p_sys->i_data_to_be_read );
+        msg_Dbg( p_access, "i_data_to_be_read %d", p_sys->i_data_to_be_read );
 
         /* update seekpoint to reflect the current position */
         if ( p_sys->i_titles > 0 )
@@ -819,6 +838,9 @@ static int Control( access_t *p_access, int i_query, va_list args )
                 //* Duplicate title infos 
                 *pi_int = p_sys->i_titles;
                 *ppp_title = malloc( sizeof( input_title_t ** ) * p_sys->i_titles );
+				if ( !*ppp_title )
+					return VLC_ENOMEM;
+
                 for( i = 0; i < p_sys->i_titles; i++ )
                 {
                     (*ppp_title)[i] = vlc_input_title_Duplicate( p_sys->titles[i] );
@@ -1057,7 +1079,7 @@ static void SDClose( vlc_object_t *p_this )
 /*****************************************************************************
  * Run
  *****************************************************************************/
-static void SDRun( void *data )
+static void *SDRun( void *data )
 {
     services_discovery_t *p_sd = data;
     services_discovery_sys_t *p_sys  = p_sd->p_sys;
@@ -1067,12 +1089,12 @@ static void SDRun( void *data )
 
     if (!psz_backendurl)
 	{
-        input_item_t *p_item = input_item_NewWithType( p_sd,
+        input_item_t *p_item = input_item_NewWithType( VLC_OBJECT( p_sd ),
             strdup("mythnotavailable://localhost/"), strdup("Please set your Mythbackend URL in the preferences (Show All, under Input > Access Modules > MythTV) and restart VLC."), 0, NULL, 0, -1, ITEM_TYPE_FILE );
         services_discovery_AddItem( p_sd, p_item, NULL );
         vlc_gc_decref( p_item );
 
-        return;
+        return NULL;
     }
 
     vlc_url_t url;
@@ -1086,7 +1108,7 @@ static void SDRun( void *data )
 
     if (!fd)
 	{
-        return;
+        return NULL;
     }
 
     myth_WriteCommand( p_sd, p_sys, fd, "QUERY_RECORDINGS Play" );
@@ -1103,17 +1125,24 @@ static void SDRun( void *data )
         char *psz_ctitle = myth_token( psz_params, i_len, 1 + i * i_fields + 0 );
         char *psz_csubtitle = myth_token( psz_params, i_len, 1 + i * i_fields + 1 );
 
+		/* concatenate .png to the URL */
+		int i_url = strlen(psz_url);
+		char* psz_arturl = malloc( i_url + 5 );
+		strncpy( psz_arturl, psz_url, i_url );
+		strncpy( psz_arturl + i_url, ".png", 5 );
+
         input_item_t *p_item = NULL;
 
         char *psz_name;
         asprintf( &psz_name, "%s: %s", psz_ctitle, psz_csubtitle );
-        p_item = input_item_NewWithType( p_sd,
+        p_item = input_item_NewWithType( VLC_OBJECT( p_sd ),
             strdup(psz_url), psz_name, 0, NULL, 0,
                                          -1, ITEM_TYPE_FILE );
         
         input_item_SetDescription( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 2 )) );
         input_item_SetGenre( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 3 )) );
         input_item_SetAlbum( p_item, strdup(psz_ctitle) );
+		input_item_SetArtURL( p_item, psz_arturl );
         input_item_SetDuration( p_item, (atoll(myth_token( psz_params, i_len, 1 + i * i_fields + 27 )) - atoll(myth_token( psz_params, i_len, 1 + i * i_fields + 26 ))) * 1000000 );
 
         services_discovery_AddItem( p_sd, p_item, NULL );
