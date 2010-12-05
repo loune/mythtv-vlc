@@ -488,99 +488,107 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
 
 
 
-static int ConnectFD( vlc_object_t *p_access, access_sys_t *p_sys, bool b_fd_data )
+static int InitialiseCommandConnection( vlc_object_t *p_access, access_sys_t *p_sys )
 {
     char *psz_params;
-    int i_len;
+    int   i_len;
 
-    int fd = myth_Connect( p_access, &p_sys->myth, &p_sys->url, b_fd_data );
+    int fd = myth_Connect( p_access, &p_sys->myth, &p_sys->url, false );
 
     if ( !fd )
 	{
         return VLC_EGENERIC;
     }
-    
-    if ( b_fd_data )
+
+    p_sys->fd_cmd = fd;
+
+	// check file exists
+	if ( myth_Send( p_access, p_sys->fd_cmd, &i_len, &psz_params, "QUERY_FILE_EXISTS[]:[]%s[]:[]Default", p_sys->url.psz_path ) )
 	{
-        p_sys->fd_data = fd;
+        return VLC_EGENERIC;
+	}
+
+	if ( i_len > 0 && psz_params[0] == '0' )
+	{
+		msg_Err( p_access, "File %s does not exist.", p_sys->url.psz_path );
+        return VLC_EGENERIC;
+	}
+
+	free( psz_params );
+
+    input_thread_t *p_input = access_GetParentInput( (access_t *) p_access );
+    if( !p_input )
+    {
+        msg_Dbg( p_access, "Unable to find parent input thread. Access may not be from video." );
+        //pl_Release( p_access );
+        return VLC_SUCCESS;
     }
-	else
+
+    if ( myth_Send( p_access, fd, &i_len, &psz_params, "QUERY_RECORDINGS Play" ) )
 	{
-        p_sys->fd_cmd = fd;
-
-        input_thread_t *p_input = access_GetParentInput( (access_t *) p_access );
-        if( !p_input )
-        {
-            msg_Dbg( p_access, "Unable to find parent input thread. Access may not be from video." );
-            //pl_Release( p_access );
-            return VLC_SUCCESS;
-        }
-
-        if ( myth_Send( p_access, fd, &i_len, &psz_params, "QUERY_RECORDINGS Play" ) )
-		{
-			vlc_object_release( p_input );
-			return VLC_EGENERIC;
-		}
+		vlc_object_release( p_input );
+		return VLC_EGENERIC;
+	}
         
-        /* Set meta data */
-        int i_tokens = myth_count_tokens( psz_params, i_len );
-        int i_rows = atoi( myth_token(psz_params, i_len, 0) );
-        int i_fields = (i_tokens-1) / i_rows;
-        for ( int i = 0; i < i_rows; i++ )
-		{
-            char* psz_url = myth_token( psz_params, i_len, 1 + i * i_fields + 8 );
-            char *psz_ctitle = myth_token( psz_params, i_len, 1 + i * i_fields + 0 );
-            char *psz_csubtitle = myth_token( psz_params, i_len, 1 + i * i_fields + 1 );
+    /* Set meta data */
+    int i_tokens = myth_count_tokens( psz_params, i_len );
+    int i_rows = atoi( myth_token(psz_params, i_len, 0) );
+    int i_fields = (i_tokens-1) / i_rows;
+    for ( int i = 0; i < i_rows; i++ )
+	{
+        char* psz_url = myth_token( psz_params, i_len, 1 + i * i_fields + 8 );
+        char *psz_ctitle = myth_token( psz_params, i_len, 1 + i * i_fields + 0 );
+        char *psz_csubtitle = myth_token( psz_params, i_len, 1 + i * i_fields + 1 );
 
-            input_item_t *p_item = NULL;
+        input_item_t *p_item = NULL;
 
-            if (strstr(psz_url, p_sys->url.psz_path)) {
-                /* found our program in all the recordings */
-                //char *psz_startdate;
-                //strftime(buffer, sizeof(buffer)-1, "%d-%m-%Y", atoi ( myth_token( psz_params, i_len, 1 + i * i_fields + 11 ) ));
+        if (strstr(psz_url, p_sys->url.psz_path)) {
+            /* found our program in all the recordings */
+            //char *psz_startdate;
+            //strftime(buffer, sizeof(buffer)-1, "%d-%m-%Y", atoi ( myth_token( psz_params, i_len, 1 + i * i_fields + 11 ) ));
 #if defined( HAVE_GMTIME_R )
-                struct tm tmres;
-                char   buffer[256];
+            struct tm tmres;
+            char   buffer[256];
 
-                time_t i_date = 0;
-                memset( buffer, 0, 256 );
-                if( gmtime_r( &i_date, &tmres ) &&
-                    asctime_r( &tmres, buffer ) )
-                {
-                    buffer[strlen( buffer)-1]= '\0';
-                    psz_startdate = strdup( buffer );
-                }
-#endif
-                int64_t i_filesize = MAKEINT64( atoi( myth_token( psz_params, i_len, 1 + i * i_fields + 10 ) ), atoi( myth_token( psz_params, i_len, 1 + i * i_fields + 9 )) );
-                input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Myth Protocol"), "%d", p_sys->myth.myth_proto_version );
-                input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Title"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 0 ) );
-                input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Sub title"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 1 ) );
-                input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Description"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 2 ) );
-                input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Category"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 3 ) );
-                input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Channel"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 7 )  );
-                input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Show start"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 11 ) );
-                input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Show end"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 12 )  );
-                input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("File size"), "%"PRId64" MB", i_filesize / 1000000  );
-                
-                p_sys->psz_basename = strdup( myth_token( psz_params, i_len, 1 + i * i_fields + 8 ) );
-
-                p_item = input_GetItem( p_input );
-                input_item_SetDate( p_item, "test" );
-
-                asprintf( &psz_ctitle, "%s: %s", psz_ctitle, psz_csubtitle );
-                input_Control( p_input, INPUT_SET_NAME, psz_ctitle );
-
-                input_item_SetDescription( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 2 )) );
-                
-                GetCutList( (access_t *) p_access, p_sys, myth_token( psz_params, i_len, 1 + i * i_fields + 4 ), myth_token( psz_params, i_len, 1 + i * i_fields + 26 ) );
-                
-                break;
+            time_t i_date = 0;
+            memset( buffer, 0, 256 );
+            if( gmtime_r( &i_date, &tmres ) &&
+                asctime_r( &tmres, buffer ) )
+            {
+                buffer[strlen( buffer)-1]= '\0';
+                psz_startdate = strdup( buffer );
             }
-        }
+#endif
+            int64_t i_filesize = MAKEINT64( atoi( myth_token( psz_params, i_len, 1 + i * i_fields + 10 ) ), atoi( myth_token( psz_params, i_len, 1 + i * i_fields + 9 )) );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Myth Protocol"), "%d", p_sys->myth.myth_proto_version );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Title"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 0 ) );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Sub title"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 1 ) );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Description"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 2 ) );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Category"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 3 ) );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Channel"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 7 )  );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Show start"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 11 ) );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Show end"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 12 )  );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("File size"), "%"PRId64" MB", i_filesize / 1000000  );
+			input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Base name"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 8 )  );
+                
+            p_sys->psz_basename = strdup( myth_token( psz_params, i_len, 1 + i * i_fields + 8 ) );
 
-        free( psz_params );
-        vlc_object_release( p_input );
+            p_item = input_GetItem( p_input );
+            input_item_SetDate( p_item, "test" );
+
+            asprintf( &psz_ctitle, "%s: %s", psz_ctitle, psz_csubtitle );
+            input_Control( p_input, INPUT_SET_NAME, psz_ctitle );
+
+            input_item_SetDescription( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 2 )) );
+                
+            GetCutList( (access_t *) p_access, p_sys, myth_token( psz_params, i_len, 1 + i * i_fields + 4 ), myth_token( psz_params, i_len, 1 + i * i_fields + 26 ) );
+                
+            break;
+        }
     }
+
+    free( psz_params );
+    vlc_object_release( p_input );
 
     return VLC_SUCCESS;
 }
@@ -635,21 +643,22 @@ static int InOpen( vlc_object_t *p_this )
     if( parseURL( &p_sys->url, p_access->psz_path ) )
         goto exit_error;
 
-    if( ConnectFD( p_this, p_sys, false ) )
+    if( InitialiseCommandConnection( p_this, p_sys ) )
         goto exit_error;
 
-    // stream
-    if( ConnectFD( p_this, p_sys, true ) )
+    // initialise streaming connection
+	p_sys->fd_data = myth_Connect( p_this, &p_sys->myth, &p_sys->url, true );
+    if( !p_sys->fd_data )
         goto exit_error;
 
-    
-    /* Update default_pts to a suitable value for ftp access */
+
     var_Create( p_access, "myth-caching", VLC_VAR_INTEGER | VLC_VAR_DOINHERIT );
     
 
     return VLC_SUCCESS;
 
 exit_error:
+
 	InClose( p_this );
 
     return VLC_EGENERIC;
@@ -781,14 +790,17 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 			return VLC_EGENERIC;
 		}
 
-        int64_t i_newsize = MAKEINT64( atoi( myth_token( psz_params, i_plen, 1 + 10 ) ), atoi( myth_token( psz_params, i_plen, 1 + 9 )) );
-
-        if ( p_access->info.i_size != i_newsize )
+		if ( strncmp( psz_params, "ERROR", 6 ) )
 		{
-            p_access->info.i_size = i_newsize;
-            p_access->info.i_update |= INPUT_UPDATE_SIZE;
-            msg_Dbg( p_access, "new file size %"PRId64, i_newsize );
-        }
+			int64_t i_newsize = MAKEINT64( atoi( myth_token( psz_params, i_plen, 1 + 10 ) ), atoi( myth_token( psz_params, i_plen, 1 + 9 )) );
+
+			if ( p_access->info.i_size != i_newsize )
+			{
+				p_access->info.i_size = i_newsize;
+				p_access->info.i_update |= INPUT_UPDATE_SIZE;
+				msg_Dbg( p_access, "new file size %"PRId64, i_newsize );
+			}
+		}
 
 		free( psz_params );
     }
