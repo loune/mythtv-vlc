@@ -106,6 +106,8 @@ static void *SDRun( void *data );
 
 static void GetCutList( access_t *, access_sys_t *, char*, char* );
 
+#define MAKEINT64(lo, hi) ( ((int64_t)hi) << 32 | ((int64_t)(uint32_t)lo) )
+
 
 typedef struct _myth_sys_t
 {
@@ -153,7 +155,13 @@ struct access_sys_t
     input_title_t **titles;
 };
 
-#define MAKEINT64(lo, hi) ( ((int64_t)hi) << 32 | ((int64_t)(uint32_t)lo) )
+static int myth_WriteCommand( vlc_object_t *p_access, int fd, const char *psz_fmt, ... );
+static int myth_ReadCommand( vlc_object_t *p_access, int fd, int *pi_len, char **ppsz_answer );
+static char* myth_token( char *psz_params, int i_len, int i_index );
+static int myth_count_tokens( char *psz_params, int i_len );
+static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* url, bool b_fd_data );
+
+
 
 /*
 static int mysql_query( vlc_object_t *p_access, access_sys_t *p_sys, int fd, 
@@ -196,8 +204,7 @@ static int mysql_query( vlc_object_t *p_access, access_sys_t *p_sys, int fd,
 }
 */
 
-static int myth_WriteCommand( vlc_object_t *p_access, void *p_sys, int fd, 
-                            const char *psz_fmt, ... )
+static int myth_WriteCommand( vlc_object_t *p_access, int fd, const char *psz_fmt, ... )
 {
     va_list      args;
     char         *psz_cmd;
@@ -225,35 +232,38 @@ static int myth_WriteCommand( vlc_object_t *p_access, void *p_sys, int fd,
         msg_Err( p_access, "failed to send command" );
         return VLC_EGENERIC;
     }
+
     return VLC_SUCCESS;
 }
 
-static int myth_ReadCommand( vlc_object_t *p_access, void *p_sys, int fd, 
-                            int *pi_len, char **ppsz_answer )
+static int myth_ReadCommand( vlc_object_t *p_access, int fd, int *pi_len, char **ppsz_answer )
 {
     /* read length */
     char lenstr[9];
     memset(lenstr, '\0', sizeof(lenstr));
     int i_Read = 0;
     int i_TotalRead = 0;
+	char *psz_line = NULL;
 
     assert( fd != -1 );
 
-    while (i_TotalRead < 8) {
+    while ( i_TotalRead < 8 )
+	{
         if ((i_Read = net_Read( p_access, fd, NULL, lenstr + i_TotalRead, 8 - i_TotalRead, false )) <= 0)
             goto exit_error;
         i_TotalRead += i_Read;
     }
+
     int len = atoi(lenstr);
     //msg_Info( p_access, "myth_ReadCommand-len:\"%d\"", len);
 
-    char *psz_line = malloc(len+1);
+    psz_line = malloc(len+1);
 	if ( !psz_line )
 		return VLC_ENOMEM;
     psz_line[len] = '\0';
 
     i_TotalRead = 0;
-    while (i_TotalRead < len)
+    while ( i_TotalRead < len )
     {
         if ((i_Read = net_Read( p_access, fd, NULL, psz_line + i_TotalRead, len - i_TotalRead, false )) <= 0)
             goto exit_error;
@@ -264,12 +274,14 @@ static int myth_ReadCommand( vlc_object_t *p_access, void *p_sys, int fd,
 
     /* post process the final string and add \0 to the end of each token sp []:[] becomes \0]:[] */
     char *cend = psz_line + len;
-    for (char *c = psz_line; c < cend; c++) {
+    for ( char *c = psz_line; c < cend; c++ )
+	{
         if (*c == '['
             && c+1 < cend && c[1] == ']'
             && c+2 < cend && c[2] == ':'
             && c+3 < cend && c[3] == '['
-            && c+4 < cend && c[4] == ']') {
+            && c+4 < cend && c[4] == ']')
+		{
             *c = '\0';
         }
     }
@@ -286,39 +298,57 @@ static int myth_ReadCommand( vlc_object_t *p_access, void *p_sys, int fd,
     else
     {
         free( psz_line );
+		psz_line = NULL;
     }
 
     return VLC_SUCCESS;
 exit_error:
-    free( psz_line );
+	if( psz_line )
+	{
+		free( psz_line );
+		psz_line = NULL;
+	}
+
+    if( pi_len )
+    {
+        *pi_len = 0;
+    }
 
     return VLC_EGENERIC;
 }
 
-static char* myth_token( char *psz_params, int i_len, int i_index ) {
-    
+static char* myth_token( char *psz_params, int i_len, int i_index )
+{
     char *cend = psz_params + i_len;
     char *c = psz_params;
-    for (; c < cend && i_index > 0; c++) {
-        if (*c == '\0') {
+    for (; c < cend && i_index > 0; c++)
+	{
+        if (*c == '\0')
+		{
             i_index--;
             c += 4;
         }
     }
+
     if (i_index != 0)
         return NULL;
-    return c;
 
+    return c;
 }
-static int myth_count_tokens( char *psz_params, int i_len ) {
+
+static int myth_count_tokens( char *psz_params, int i_len )
+{
     int i_result = 1;
     char *cend = psz_params + i_len;
     char *c = psz_params;
-    for (; c < cend; c++) {
-        if (*c == '\0') {
+    for (; c < cend; c++)
+	{
+        if (*c == '\0')
+		{
             i_result++;
         }
     }
+
     return i_result;
 }
 
@@ -349,9 +379,9 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
 			return 0;
 		}
 
-		if( myth_WriteCommand( p_access, p_sys, fd, "MYTH_PROTO_VERSION %d", p_sys->myth_proto_version ) < 0 )
+		if( myth_WriteCommand( p_access, fd, "MYTH_PROTO_VERSION %d", p_sys->myth_proto_version ) < 0 )
 		{
-			msg_Err( p_access, "failed to introduce ourselves" );
+			msg_Err( p_access, "Failed to introduce ourselves (write)" );
 			net_Close( fd );
 			return 0;
 		}
@@ -392,8 +422,8 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
 
 		if ( b_fd_data )
 		{
-			myth_WriteCommand( p_access, p_sys, fd, "ANN FileTransfer VLC_%s[]:[]myth://%s:%d/%s[]:[]Default", p_sys->sz_local_ip, url->psz_host, url->i_port, url->psz_path );
-			myth_ReadCommand( p_access, p_sys, fd, &i_len, &psz_params );
+			myth_WriteCommand( p_access, fd, "ANN FileTransfer VLC_%s[]:[]myth://%s:%d/%s[]:[]Default", p_sys->sz_local_ip, url->psz_host, url->i_port, url->psz_path );
+			myth_ReadCommand( p_access, fd, &i_len, &psz_params );
 			acceptreject = myth_token(psz_params, i_len, 0);
 			if ( !strncmp( acceptreject, "OK", 2) )
 			{
@@ -414,8 +444,8 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
 		}
 		else
 		{
-			myth_WriteCommand( p_access, p_sys, fd, "ANN Playback VLC_%s 0", p_sys->sz_local_ip);
-			myth_ReadCommand( p_access, p_sys, fd, &i_len, &psz_params );
+			myth_WriteCommand( p_access, fd, "ANN Playback VLC_%s 0", p_sys->sz_local_ip);
+			myth_ReadCommand( p_access, fd, &i_len, &psz_params );
 			acceptreject = myth_token(psz_params, i_len, 0);
 			if ( strncmp( acceptreject, "OK", 2 ) )
 			{
@@ -426,9 +456,7 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
 			}
 
 			free( psz_params );
-
 		}
-    
 
 		return fd;
 	}
@@ -445,13 +473,17 @@ static int ConnectFD( vlc_object_t *p_access, access_sys_t *p_sys, bool b_fd_dat
 
     int fd = myth_Connect( p_access, &p_sys->myth, &p_sys->url, b_fd_data );
 
-    if (!fd) {
+    if (!fd)
+	{
         return VLC_EGENERIC;
     }
     
-    if (b_fd_data) {
+    if (b_fd_data)
+	{
         p_sys->fd_data = fd;
-    } else {
+    }
+	else
+	{
         p_sys->fd_cmd = fd;
 
         input_thread_t *p_input = access_GetParentInput( (access_t *) p_access );
@@ -462,14 +494,15 @@ static int ConnectFD( vlc_object_t *p_access, access_sys_t *p_sys, bool b_fd_dat
             return VLC_SUCCESS;
         }
 
-        myth_WriteCommand( p_access, p_sys, fd, "QUERY_RECORDINGS Play" );
-        myth_ReadCommand( p_access, p_sys, fd, &i_len, &psz_params );
+        myth_WriteCommand( p_access, fd, "QUERY_RECORDINGS Play" );
+        myth_ReadCommand( p_access, fd, &i_len, &psz_params );
         
         /* Set meta data */
         int i_tokens = myth_count_tokens( psz_params, i_len );
         int i_rows = atoi( myth_token(psz_params, i_len, 0) );
         int i_fields = (i_tokens-1) / i_rows;
-        for ( int i = 0; i < i_rows; i++ ) {
+        for ( int i = 0; i < i_rows; i++ )
+		{
             char* psz_url = myth_token( psz_params, i_len, 1 + i * i_fields + 8 );
             char *psz_ctitle = myth_token( psz_params, i_len, 1 + i * i_fields + 0 );
             char *psz_csubtitle = myth_token( psz_params, i_len, 1 + i * i_fields + 1 );
@@ -637,8 +670,8 @@ static int _Seek( vlc_object_t *p_access, access_sys_t *p_sys, int64_t i_pos )
 
     char *psz_params;
     int i_plen;
-    myth_WriteCommand( p_access, p_sys, p_sys->fd_cmd, "QUERY_FILETRANSFER %s[]:[]SEEK[]:[]%d[]:[]%d[]:[]0[]:[]0[]:[]0", p_sys->myth.file_transfer_id, (int32_t)(i_pos >> 32), (int32_t)(i_pos));
-    myth_ReadCommand( p_access, p_sys, p_sys->fd_cmd, &i_plen, &psz_params );
+    myth_WriteCommand( p_access, p_sys->fd_cmd, "QUERY_FILETRANSFER %s[]:[]SEEK[]:[]%d[]:[]%d[]:[]0[]:[]0[]:[]0", p_sys->myth.file_transfer_id, (int32_t)(i_pos >> 32), (int32_t)(i_pos));
+    myth_ReadCommand( p_access, p_sys->fd_cmd, &i_plen, &psz_params );
 
     return VLC_SUCCESS;
 }
@@ -684,8 +717,8 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 	if ( !p_sys->b_eofing && p_sys->i_data_to_be_read <= i_requestlen / 2 )
 	{
 		msg_Dbg( p_access, "REQUEST_BLOCK %d", i_requestlen );
-		myth_WriteCommand( VLC_OBJECT( p_access ), p_sys, p_sys->fd_cmd, "QUERY_FILETRANSFER %s[]:[]REQUEST_BLOCK[]:[]%d", p_sys->myth.file_transfer_id, i_requestlen );
-		myth_ReadCommand( VLC_OBJECT( p_access ), p_sys, p_sys->fd_cmd, &i_plen, &psz_params );
+		myth_WriteCommand( VLC_OBJECT( p_access ), p_sys->fd_cmd, "QUERY_FILETRANSFER %s[]:[]REQUEST_BLOCK[]:[]%d", p_sys->myth.file_transfer_id, i_requestlen );
+		myth_ReadCommand( VLC_OBJECT( p_access ), p_sys->fd_cmd, &i_plen, &psz_params );
 		i_will_receive = atoi( myth_token(psz_params, i_plen, 0) );
 
 		msg_Dbg( p_access, "i_will_receive %d", i_will_receive );
@@ -713,8 +746,8 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
         // update the file size every 2 seconds
         p_sys->i_filesize_last_updated = mdate();
 
-        myth_WriteCommand( VLC_OBJECT( p_access ), p_sys, p_sys->fd_cmd, "QUERY_RECORDING BASENAME %s", p_sys->psz_basename );
-        myth_ReadCommand( VLC_OBJECT( p_access ), p_sys, p_sys->fd_cmd, &i_plen, &psz_params );
+        myth_WriteCommand( VLC_OBJECT( p_access ), p_sys->fd_cmd, "QUERY_RECORDING BASENAME %s", p_sys->psz_basename );
+        myth_ReadCommand( VLC_OBJECT( p_access ), p_sys->fd_cmd, &i_plen, &psz_params );
 
         int64_t i_newsize = MAKEINT64( atoi( myth_token( psz_params, i_plen, 1 + 10 ) ), atoi( myth_token( psz_params, i_plen, 1 + 9 )) );
 
@@ -925,8 +958,8 @@ static void GetCutList( access_t *p_access, access_sys_t *p_sys, char* psz_chann
     s->psz_name = strdup( "Start" );
     TAB_APPEND( t->i_seekpoint, t->seekpoint, s );
     
-    myth_WriteCommand( VLC_OBJECT( p_access ), &p_sys->myth, p_sys->fd_cmd, "QUERY_COMMBREAK %s %s", psz_channel, psz_starttime );
-    myth_ReadCommand( VLC_OBJECT( p_access ), &p_sys->myth, p_sys->fd_cmd, &i_len, &psz_params );
+    myth_WriteCommand( VLC_OBJECT( p_access ), p_sys->fd_cmd, "QUERY_COMMBREAK %s %s", psz_channel, psz_starttime );
+    myth_ReadCommand( VLC_OBJECT( p_access ), p_sys->fd_cmd, &i_len, &psz_params );
     //msg_Info( p_access, "QUERY_COMMBREAK %s %s", psz_channel, psz_starttime );
     int i_tokens = myth_count_tokens( psz_params, i_len );
     int i_rows = atoi( myth_token(psz_params, i_len, 0) );
@@ -938,8 +971,8 @@ static void GetCutList( access_t *p_access, access_sys_t *p_sys, char* psz_chann
         int64_t i_byte = 0;
 
         /* get byte from frame */
-        myth_WriteCommand( VLC_OBJECT( p_access ), &p_sys->myth, p_sys->fd_cmd, "SQL_QUERY[]:[]SELECT offset FROM recordedseek WHERE chanid=%s AND UNIX_TIMESTAMP(starttime)=%s AND mark <= %"PRId64" ORDER BY mark DESC LIMIT 1", psz_channel, psz_starttime, i_frame );
-        myth_ReadCommand( VLC_OBJECT( p_access ), &p_sys->myth, p_sys->fd_cmd, &i_results, &psz_results );
+        myth_WriteCommand( VLC_OBJECT( p_access ), p_sys->fd_cmd, "SQL_QUERY[]:[]SELECT offset FROM recordedseek WHERE chanid=%s AND UNIX_TIMESTAMP(starttime)=%s AND mark <= %"PRId64" ORDER BY mark DESC LIMIT 1", psz_channel, psz_starttime, i_frame );
+        myth_ReadCommand( VLC_OBJECT( p_access ), p_sys->fd_cmd, &i_results, &psz_results );
         int i_rrows = atoi( myth_token( psz_results, i_results, 0) );
         if (i_rrows > 0) {
             i_byte = atoll( myth_token( psz_results, i_results, 1 ) );
@@ -1112,8 +1145,8 @@ static void *SDRun( void *data )
         return NULL;
     }
 
-    myth_WriteCommand( VLC_OBJECT( p_sd ), p_sys, fd, "QUERY_RECORDINGS Play" );
-    myth_ReadCommand( VLC_OBJECT( p_sd ), p_sys, fd, &i_len, &psz_params );
+    myth_WriteCommand( VLC_OBJECT( p_sd ), fd, "QUERY_RECORDINGS Play" );
+    myth_ReadCommand( VLC_OBJECT( p_sd ), fd, &i_len, &psz_params );
 
     bool addToPlayList = true;
 
