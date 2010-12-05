@@ -454,10 +454,10 @@ static int ConnectFD( vlc_object_t *p_access, access_sys_t *p_sys, bool b_fd_dat
     } else {
         p_sys->fd_cmd = fd;
 
-        input_thread_t *p_input = vlc_object_find( p_access, VLC_OBJECT_INPUT, FIND_PARENT );
+        input_thread_t *p_input = access_GetParentInput( (access_t *) p_access );
         if( !p_input )
         {
-            msg_Info( p_access, "Unable to find input. Access may not be from video." );
+            msg_Dbg( p_access, "Unable to find parent input thread. Access may not be from video." );
             //pl_Release( p_access );
             return VLC_SUCCESS;
         }
@@ -691,7 +691,7 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 		msg_Dbg( p_access, "i_will_receive %d", i_will_receive );
 		if ( i_will_receive <= 0 )
 		{
-			msg_Dbg( p_access, "SET EOF A" );
+			msg_Dbg( p_access, "SET EOFing" );
 			p_sys->b_eofing = true;
 		}
 		else
@@ -703,7 +703,7 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 	/* check if last block now read */
 	if ( p_sys->b_eofing && p_sys->i_data_to_be_read == 0 )
 	{
-		msg_Dbg( p_access, "SET EOF B" );
+		msg_Dbg( p_access, "SET EOF from eofing" );
 		p_access->info.b_eof = true;
 		return 0;
 	}
@@ -732,7 +732,7 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 
     if( i_read <= 0 )
 	{
-        msg_Dbg( p_access, "SET EOF C" );
+        msg_Dbg( p_access, "SET EOF because i_read nothing" );
         p_access->info.b_eof = true;
     }
     else
@@ -845,6 +845,7 @@ static int Control( access_t *p_access, int i_query, va_list args )
                 {
                     (*ppp_title)[i] = vlc_input_title_Duplicate( p_sys->titles[i] );
                 }
+
                 return VLC_SUCCESS;
             }
         case ACCESS_SET_TITLE:
@@ -869,7 +870,7 @@ static int Control( access_t *p_access, int i_query, va_list args )
                 //Seek( p_access, (int64_t)p_sys->titles[0]->seekpoint[i_skp]->i_byte_offset);
 
                 /* do the seeking */
-                input_thread_t *p_input = vlc_object_find( p_access, VLC_OBJECT_INPUT, FIND_PARENT );
+                input_thread_t *p_input = access_GetParentInput( p_access );
                 input_Control( p_input, INPUT_SET_POSITION, (double)p_sys->titles[0]->seekpoint[i_skp]->i_byte_offset / p_access->info.i_size );
                 vlc_object_release( p_input );
 
@@ -924,21 +925,21 @@ static void GetCutList( access_t *p_access, access_sys_t *p_sys, char* psz_chann
     s->psz_name = strdup( "Start" );
     TAB_APPEND( t->i_seekpoint, t->seekpoint, s );
     
-    myth_WriteCommand( p_access, &p_sys->myth, p_sys->fd_cmd, "QUERY_COMMBREAK %s %s", psz_channel, psz_starttime );
-    myth_ReadCommand( p_access, &p_sys->myth, p_sys->fd_cmd, &i_len, &psz_params );
+    myth_WriteCommand( VLC_OBJECT( p_access ), &p_sys->myth, p_sys->fd_cmd, "QUERY_COMMBREAK %s %s", psz_channel, psz_starttime );
+    myth_ReadCommand( VLC_OBJECT( p_access ), &p_sys->myth, p_sys->fd_cmd, &i_len, &psz_params );
     //msg_Info( p_access, "QUERY_COMMBREAK %s %s", psz_channel, psz_starttime );
     int i_tokens = myth_count_tokens( psz_params, i_len );
     int i_rows = atoi( myth_token(psz_params, i_len, 0) );
     int i_fields = (i_tokens-1) / i_rows;
     for ( int i = 0; i < i_rows; i++ ) {
         char *psz_results;
-        char *i_results;
+        int i_results;
         int64_t i_frame = atoi( myth_token( psz_params, i_len, 1 + i * i_fields + 2 ) );
         int64_t i_byte = 0;
 
         /* get byte from frame */
-        myth_WriteCommand( p_access, &p_sys->myth, p_sys->fd_cmd, "SQL_QUERY[]:[]SELECT offset FROM recordedseek WHERE chanid=%s AND UNIX_TIMESTAMP(starttime)=%s AND mark <= %"PRId64" ORDER BY mark DESC LIMIT 1", psz_channel, psz_starttime, i_frame );
-        myth_ReadCommand( p_access, &p_sys->myth, p_sys->fd_cmd, &i_results, &psz_results );
+        myth_WriteCommand( VLC_OBJECT( p_access ), &p_sys->myth, p_sys->fd_cmd, "SQL_QUERY[]:[]SELECT offset FROM recordedseek WHERE chanid=%s AND UNIX_TIMESTAMP(starttime)=%s AND mark <= %"PRId64" ORDER BY mark DESC LIMIT 1", psz_channel, psz_starttime, i_frame );
+        myth_ReadCommand( VLC_OBJECT( p_access ), &p_sys->myth, p_sys->fd_cmd, &i_results, &psz_results );
         int i_rrows = atoi( myth_token( psz_results, i_results, 0) );
         if (i_rrows > 0) {
             i_byte = atoll( myth_token( psz_results, i_results, 1 ) );
@@ -1111,8 +1112,8 @@ static void *SDRun( void *data )
         return NULL;
     }
 
-    myth_WriteCommand( p_sd, p_sys, fd, "QUERY_RECORDINGS Play" );
-    myth_ReadCommand( p_sd, p_sys, fd, &i_len, &psz_params );
+    myth_WriteCommand( VLC_OBJECT( p_sd ), p_sys, fd, "QUERY_RECORDINGS Play" );
+    myth_ReadCommand( VLC_OBJECT( p_sd ), p_sys, fd, &i_len, &psz_params );
 
     bool addToPlayList = true;
 
