@@ -99,7 +99,7 @@ vlc_module_end()
  * Local prototypes
  *****************************************************************************/
 static ssize_t Read( access_t *, uint8_t *, size_t );
-static int Seek( access_t *, int64_t );
+static int Seek( access_t *, uint64_t );
 static int Control( access_t *, int, va_list );
 
 static void *SDRun( void *data );
@@ -149,9 +149,7 @@ struct access_sys_t
     char      *psz_basename;
 	bool       b_eofing;
 
-    int64_t    realpos;
-
-    int           i_titles;
+    int        i_titles;
     input_title_t **titles;
 };
 
@@ -710,7 +708,7 @@ static int _Seek( vlc_object_t *p_access, access_sys_t *p_sys, int64_t i_pos )
     return VLC_SUCCESS;
 }
 
-static int Seek( access_t *p_access, int64_t i_pos )
+static int Seek( access_t *p_access, uint64_t i_pos )
 {
     access_sys_t *p_sys = p_access->p_sys;
     int val = _Seek( (vlc_object_t *)p_access, p_access->p_sys, i_pos );
@@ -780,7 +778,7 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 		return 0;
 	}
 
-    if ( p_sys->psz_basename && mdate() - p_sys->i_filesize_last_updated > 2000000 )
+    if ( p_sys->psz_basename && mdate() - p_sys->i_filesize_last_updated > 1000000 )
 	{
         // update the file size every 2 seconds
         p_sys->i_filesize_last_updated = mdate();
@@ -792,13 +790,13 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 
 		if ( strncmp( psz_params, "ERROR", 6 ) )
 		{
-			int64_t i_newsize = MAKEINT64( atoi( myth_token( psz_params, i_plen, 1 + 10 ) ), atoi( myth_token( psz_params, i_plen, 1 + 9 )) );
+			uint64_t i_newsize = MAKEINT64( atoi( myth_token( psz_params, i_plen, 1 + 10 ) ), atoi( myth_token( psz_params, i_plen, 1 + 9 )) );
 
 			if ( p_access->info.i_size != i_newsize )
 			{
 				p_access->info.i_size = i_newsize;
 				p_access->info.i_update |= INPUT_UPDATE_SIZE;
-				msg_Dbg( p_access, "new file size %"PRId64, i_newsize );
+				msg_Dbg( p_access, "new file size %"PRId64" position %"PRId64, i_newsize, p_access->info.i_pos );
 			}
 		}
 
@@ -828,7 +826,7 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
             input_title_t *t = p_sys->titles[p_access->info.i_title];
             for( i = 0; i < t->i_seekpoint; i++ )
             {
-                if (p_access->info.i_pos <= t->seekpoint[i]->i_byte_offset)
+                if (p_access->info.i_pos <= (uint64_t) t->seekpoint[i]->i_byte_offset)
                     break;
             }
 
@@ -850,7 +848,6 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 static int Control( access_t *p_access, int i_query, va_list args )
 {
     bool   *pb_bool;
-    int          *pi_int;
     int64_t      *pi_64;
     vlc_value_t  val;
 
@@ -1189,9 +1186,8 @@ static void *SDRun( void *data )
 
     char *psz_params;
     int i_len;
-    vlc_object_t *p_access = p_sd;
 
-    int fd = myth_Connect( p_access, &p_sys->myth, &url, false );
+    int fd = myth_Connect( VLC_OBJECT( p_sd ), &p_sys->myth, &url, false );
 
     if ( !fd )
 	{
@@ -1202,8 +1198,6 @@ static void *SDRun( void *data )
 	{
 		return NULL;
 	}
-
-    bool addToPlayList = true;
 
     int i_tokens = myth_count_tokens( psz_params, i_len );
     int i_rows = atoi( myth_token(psz_params, i_len, 0) );
@@ -1242,5 +1236,6 @@ static void *SDRun( void *data )
 
     net_Close( fd );
 
+	return NULL;
 }
 
