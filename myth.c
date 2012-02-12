@@ -43,6 +43,8 @@
 #include <vlc_services_discovery.h>
 #include <vlc_url.h>
 
+#include <time.h>
+
 #define IPPORT_MYTH 6543u
 
 
@@ -124,9 +126,8 @@ typedef struct _myth_sys_t
 struct services_discovery_sys_t
 {
     myth_sys_t myth;
-    /* playlist node */
-    input_thread_t **pp_input;
-    int i_input;
+    vlc_url_t  backend_url;
+    vlc_array_t* items;
 
     vlc_thread_t thread;
     vlc_mutex_t lock;
@@ -134,6 +135,8 @@ struct services_discovery_sys_t
 
     char **ppsz_urls;
     int i_urls;
+
+    int fd_cmd;
 
     bool b_update;
 };
@@ -161,7 +164,7 @@ static char* myth_token( char *psz_params, int i_len, int i_index );
 static int myth_count_tokens( char *psz_params, int i_len );
 static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* url, bool b_fd_data );
 
-
+int ( *myth_BackendMessage_t )( vlc_object_t *p_object, char *psz_params, int i_len );
 
 /*
 static int mysql_query( vlc_object_t *p_access, access_sys_t *p_sys, int fd, 
@@ -236,23 +239,23 @@ static int myth_ReadCommand( vlc_object_t *p_access, int fd, int *pi_len, char *
 
     assert( fd != -1 );
 
-    while ( i_TotalRead < 8 )
+    while( i_TotalRead < 8 )
     {
-        if ((i_Read = net_Read( p_access, fd, NULL, lenstr + i_TotalRead, 8 - i_TotalRead, false )) <= 0)
+        if( ( i_Read = net_Read( p_access, fd, NULL, lenstr + i_TotalRead, 8 - i_TotalRead, false ) ) <= 0 )
             goto exit_error;
         i_TotalRead += i_Read;
     }
 
-    int len = atoi(lenstr);
+    int len = atoi( lenstr );
     //msg_Info( p_access, "myth_ReadCommand-len:\"%d\"", len);
 
-    psz_line = malloc(len+1);
-    if ( !psz_line )
+    psz_line = malloc( len+1 );
+    if( !psz_line )
         return VLC_ENOMEM;
     psz_line[len] = '\0';
 
     i_TotalRead = 0;
-    while ( i_TotalRead < len )
+    while( i_TotalRead < len )
     {
         if ((i_Read = net_Read( p_access, fd, NULL, psz_line + i_TotalRead, len - i_TotalRead, false )) <= 0)
             goto exit_error;
@@ -263,7 +266,7 @@ static int myth_ReadCommand( vlc_object_t *p_access, int fd, int *pi_len, char *
 
     /* post process the final string and add \0 to the end of each token sp []:[] becomes \0]:[] */
     char *cend = psz_line + len;
-    for ( char *c = psz_line; c < cend; c++ )
+    for( char *c = psz_line; c < cend; c++ )
     {
         if (*c == '['
             && c+1 < cend && c[1] == ']'
@@ -565,6 +568,8 @@ static int InitialiseCommandConnection( vlc_object_t *p_access, access_sys_t *p_
                 psz_startdate = strdup( buffer );
             }
 #endif
+            char psz_datebuf[1000];
+            time_t time;
             int64_t i_filesize = atoll( myth_token( psz_params, i_len, 1 + i * i_fields + 9 ) );
             input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Myth Protocol"), "%d", p_sys->myth.myth_proto_version );
             input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Title"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 0 ) );
@@ -572,8 +577,15 @@ static int InitialiseCommandConnection( vlc_object_t *p_access, access_sys_t *p_
             input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Description"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 2 ) );
             input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Category"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 3 ) );
             input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Channel"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 7 )  );
-            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Show start"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 10 ) );
-            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Show end"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 11 )  );
+
+            time = atoll( myth_token( psz_params, i_len, 1 + i * i_fields + 10 ) );
+            strftime( psz_datebuf, sizeof( psz_datebuf ), "%Y-%m-%d %I:%M%p", localtime( &time ) );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Show start"), "%s", psz_datebuf );
+            
+            time = atoll( myth_token( psz_params, i_len, 1 + i * i_fields + 10 ) );
+            strftime( psz_datebuf, sizeof( psz_datebuf ), "%Y-%m-%d %I:%M%p", localtime( &time ) );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Show end"), "%s", psz_datebuf );
+
             input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("File size"), "%"PRId64" MB", i_filesize / 1000000  );
             input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Base name"), "%s", myth_token( psz_params, i_len, 1 + i * i_fields + 8 )  );
                 
@@ -1104,14 +1116,14 @@ static int SDOpen( vlc_object_t *p_this )
 
     p_sys->i_urls = 0;
     p_sys->ppsz_urls = NULL;
-    p_sys->i_input = 0;
-    p_sys->pp_input = NULL;
     vlc_mutex_init( &p_sys->lock );
     vlc_cond_init( &p_sys->wait );
     p_sys->b_update = true;
     
     p_sys->myth.myth_proto_version = MYTH_MINIMUM_VER;
     p_sd->p_sys  = p_sys;
+
+    p_sys->items = vlc_array_new( );
 
     /* Give us a name */
     //services_discovery_SetLocalizedName( p_sd, _("MythTV") );
@@ -1145,20 +1157,23 @@ static void SDClose( vlc_object_t *p_this )
     vlc_cancel (p_sys->thread);
     vlc_join (p_sys->thread, NULL);
 
+    if( p_sys->fd_cmd )
+    {
+        net_Close( p_sys->fd_cmd );
+    }
+
+    for( i = 0; i < p_sys->items->i_count; i++ )
+    {
+        input_item_t *p_item = p_sys->items->pp_elems[i];
+        vlc_gc_decref( p_item );
+    }
+
+    vlc_array_destroy( p_sys->items );
+
     var_DelCallback( p_sd, "mythbackend-url", UrlsChange, p_sys );
     vlc_cond_destroy( &p_sys->wait );
     vlc_mutex_destroy( &p_sys->lock );
 
-    for( i = 0; i < p_sys->i_input; i++ )
-    {
-        if( p_sd->p_sys->pp_input[i] )
-        {
-            //input_StopThread( p_sd->p_sys->pp_input[i] );
-            vlc_object_release( p_sd->p_sys->pp_input[i] );
-            p_sd->p_sys->pp_input[i] = NULL;
-        }
-    }
-    free( p_sd->p_sys->pp_input );
     for( i = 0; i < p_sys->i_urls; i++ ) free( p_sys->ppsz_urls[i] );
     free( p_sys->ppsz_urls );
     free( p_sys );
@@ -1166,6 +1181,90 @@ static void SDClose( vlc_object_t *p_this )
     msg_Dbg( p_sd, "SD Close" );
 }
 
+static void SDCreateItem( services_discovery_t *p_sd, int i, int i_fields, char *psz_params, int i_len )
+{
+    services_discovery_sys_t *p_sys  = p_sd->p_sys;
+
+    char *psz_urlbase = myth_token( psz_params, i_len, 1 + i * i_fields + 8 );
+    char *psz_ctitle = myth_token( psz_params, i_len, 1 + i * i_fields + 0 );
+    char *psz_csubtitle = myth_token( psz_params, i_len, 1 + i * i_fields + 1 );
+
+    char *psz_url;
+    if( strncmp( psz_urlbase, "myth://", 7 ) )
+    {
+        /* convert to fully qualified URL */
+        asprintf( &psz_url, "myth://%s:%d/%s", p_sys->backend_url.psz_host, p_sys->backend_url.i_port, psz_urlbase );
+    }
+    else
+    {
+        psz_url = strdup( psz_urlbase );
+    }
+
+    char* psz_arturl;
+    asprintf( &psz_arturl, "%s.png", psz_url );
+
+    input_item_t *p_item = NULL;
+
+    char *psz_name;
+    asprintf( &psz_name, "%s: %s", psz_ctitle, psz_csubtitle );
+    p_item = input_item_NewWithType( VLC_OBJECT( p_sd ),
+        psz_url, psz_name, 0, NULL, 0,
+                                        -1, ITEM_TYPE_FILE );
+        
+    input_item_SetDescription( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 2 )) );
+    input_item_SetGenre( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 3 )) );
+    input_item_SetAlbum( p_item, strdup(psz_ctitle) );
+    input_item_SetArtURL( p_item, psz_arturl );
+    input_item_SetDuration( p_item, ( atoll( myth_token( psz_params, i_len, 1 + i * i_fields + 24 ) ) - atoll( myth_token( psz_params, i_len, 1 + i * i_fields + 23 ) ) ) * 1000000 );
+
+    char psz_datebuf[1000];
+    time_t time;
+    time = atoll( myth_token( psz_params, i_len, 1 + i * i_fields + 10 ) );
+    strftime( psz_datebuf, sizeof( psz_datebuf ), "%Y-%m-%d %H:%M", localtime( &time ) );
+    input_item_SetDate( p_item, psz_datebuf );
+    input_item_SetArtist( p_item, psz_datebuf );
+
+    services_discovery_AddItem( p_sd, p_item, NULL );
+    //vlc_gc_decref( p_item );
+
+    vlc_array_append( p_sys->items, p_item );
+
+}
+
+static int SDRefreshRecordings( services_discovery_t *p_sd )
+{
+    char *psz_params;
+    int i_len;
+    services_discovery_sys_t *p_sys  = p_sd->p_sys;
+    
+    msg_Dbg( p_sd, "SD Refresh Recordings" );
+    
+    for( int i = 0; i < p_sys->items->i_count; i++ )
+    {
+        input_item_t *p_item = p_sys->items->pp_elems[i];
+        services_discovery_RemoveItem( p_sd, p_item );
+        vlc_gc_decref( p_item );
+    }
+
+    vlc_array_clear( p_sys->items );
+
+    if ( myth_Send( VLC_OBJECT( p_sd ), p_sys->fd_cmd, &i_len, &psz_params, "QUERY_RECORDINGS Play" ) )
+    {
+        return VLC_EGENERIC;
+    }
+
+    int i_tokens = myth_count_tokens( psz_params, i_len );
+    int i_rows = atoi( myth_token( psz_params, i_len, 0 ) );
+    int i_fields = ( i_tokens - 1 ) / i_rows;
+    for ( int i = 0; i < i_rows; i++ )
+    {
+        SDCreateItem( p_sd, i, i_fields, psz_params, i_len );
+    }
+
+    free( psz_params );
+
+    return VLC_SUCCESS;
+}
 
 
 /*****************************************************************************
@@ -1177,78 +1276,75 @@ static void *SDRun( void *data )
     services_discovery_sys_t *p_sys  = p_sd->p_sys;
     char* psz_backendurl = var_GetNonEmptyString( p_sd, "mythbackend-url" );
     
+    int canc = vlc_savecancel();
+
     msg_Dbg( p_sd, "SD Run" );
 
     if ( !psz_backendurl )
     {
         input_item_t *p_item = input_item_NewWithType( VLC_OBJECT( p_sd ),
-            strdup("mythnotavailable://localhost/"), strdup("Please set your Mythbackend URL in the preferences (Show All, under Input > Access Modules > MythTV) and restart VLC."), 0, NULL, 0, -1, ITEM_TYPE_FILE );
+            strdup( "mythnotavailable://localhost/" ), strdup( "Please set your Mythbackend URL in the preferences (Show All, under Input > Access Modules > MythTV) and restart VLC." ), 0, NULL, 0, -1, ITEM_TYPE_FILE );
         services_discovery_AddItem( p_sd, p_item, NULL );
         vlc_gc_decref( p_item );
 
         return NULL;
     }
 
-    vlc_url_t url;
-    parseURL( &url, psz_backendurl );
+    parseURL( &p_sys->backend_url, psz_backendurl );
 
     char *psz_params;
     int i_len;
 
-    int fd = myth_Connect( VLC_OBJECT( p_sd ), &p_sys->myth, &url, false );
+    p_sys->fd_cmd = myth_Connect( VLC_OBJECT( p_sd ), &p_sys->myth, &p_sys->backend_url, false );
 
-    if ( !fd )
+    if ( !p_sys->fd_cmd )
     {
         return NULL;
     }
 
-    if ( myth_Send( VLC_OBJECT( p_sd ), fd, &i_len, &psz_params, "QUERY_RECORDINGS Play" ) )
+    if ( SDRefreshRecordings( p_sd ) )
     {
         return NULL;
     }
-
-    int i_tokens = myth_count_tokens( psz_params, i_len );
-    int i_rows = atoi( myth_token(psz_params, i_len, 0) );
-    int i_fields = (i_tokens-1) / i_rows;
-    for ( int i = 0; i < i_rows; i++ )
-    {
-        char* psz_url = myth_token( psz_params, i_len, 1 + i * i_fields + 8 );
-        char *psz_ctitle = myth_token( psz_params, i_len, 1 + i * i_fields + 0 );
-        char *psz_csubtitle = myth_token( psz_params, i_len, 1 + i * i_fields + 1 );
-
-        /* concatenate .png to the URL */
-        int i_url = strlen(psz_url);
-        char* psz_arturl = malloc( i_url + 5 );
-        strncpy( psz_arturl, psz_url, i_url );
-        strncpy( psz_arturl + i_url, ".png", 5 );
-
-        input_item_t *p_item = NULL;
-
-        char *psz_name;
-        asprintf( &psz_name, "%s: %s", psz_ctitle, psz_csubtitle );
-        p_item = input_item_NewWithType( VLC_OBJECT( p_sd ),
-            strdup(psz_url), psz_name, 0, NULL, 0,
-                                         -1, ITEM_TYPE_FILE );
-        
-        input_item_SetDescription( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 2 )) );
-        input_item_SetGenre( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 3 )) );
-        input_item_SetAlbum( p_item, strdup(psz_ctitle) );
-        input_item_SetArtURL( p_item, psz_arturl );
-        input_item_SetDuration( p_item, (atoll(myth_token( psz_params, i_len, 1 + i * i_fields + 27 )) - atoll(myth_token( psz_params, i_len, 1 + i * i_fields + 26 ))) * 1000000 );
-
-        services_discovery_AddItem( p_sd, p_item, NULL );
-        vlc_gc_decref( p_item );
-    }
-
-    free( psz_params );
     
-    //for (;;)
-    //{
+    for ( ;; )
+    {
+        vlc_restorecancel( canc );
 
-    //}
+        if ( myth_ReadCommand( ( vlc_object_t * ) p_sd, p_sys->fd_cmd, &i_len, &psz_params ) )
+        {
+            return NULL;
+        }
+        
+        canc = vlc_savecancel();
 
-    net_Close( fd );
+        if ( !strcmp( "BACKEND_MESSAGE", myth_token( psz_params, i_len, 0 ) ) )
+        {
+            msg_Info( ( vlc_object_t * ) p_sd, "BACKEND -> %s ; %s ; %s ; %s", myth_token( psz_params, i_len, 1 ), myth_token( psz_params, i_len, 2 ), myth_token( psz_params, i_len, 3 ), myth_token( psz_params, i_len, 4 ) );
+            char *psz_change = myth_token( psz_params, i_len, 1 );
+            if ( !strncmp( "RECORDING_LIST_CHANGE ADD", psz_change,  24 ) )
+            {
+                char* psz_query;
+                asprintf( &psz_query, "QUERY_RECORDING TIMESLOT%s", psz_change + 25 );
 
-    return NULL;
+                if ( myth_Send( VLC_OBJECT( p_sd ), p_sys->fd_cmd, &i_len, &psz_params, psz_query  ) )
+                {
+                    return NULL;
+                }
+
+                free( psz_query );
+
+                SDCreateItem( p_sd, 0, myth_count_tokens( psz_params, i_len ) - 1, psz_params, i_len );
+            }
+            else if ( !strncmp( "RECORDING_LIST_CHANGE DELETE", psz_change,  27 ) )
+            {
+
+            }
+
+            free( psz_params );
+        }
+    }
+    
+    assert (0);
 }
 
