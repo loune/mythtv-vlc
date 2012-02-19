@@ -75,7 +75,7 @@ vlc_module_begin()
     set_capability( "access", 0 )
     set_category( CAT_INPUT )
     set_subcategory( SUBCAT_INPUT_ACCESS )
-    add_integer( "myth-caching", 2 * DEFAULT_PTS_DELAY / 1000, NULL,
+    add_integer( "myth-caching", 2 * DEFAULT_PTS_DELAY / 1000, 
                  CACHING_TEXT, CACHING_LONGTEXT, true )
     add_shortcut( "myth" )
     add_shortcut( "mythlivetv" )
@@ -87,9 +87,8 @@ vlc_module_begin()
         set_category( CAT_PLAYLIST )
         set_subcategory( SUBCAT_PLAYLIST_SD )
 
-        add_string( "mythbackend-url", NULL, NULL,
+        add_string( "mythbackend-url", NULL, 
                     SERVER_URL_TEXT, SERVER_URL_LONGTEXT, false )
-            change_autosave()
 
         set_capability( "services_discovery", 0 )
         set_callbacks( SDOpen, SDClose )
@@ -658,7 +657,7 @@ static int InOpen( vlc_object_t *p_this )
 
     p_sys->i_titles = 0;
 
-    if( parseURL( &p_sys->url, p_access->psz_path ) )
+    if( parseURL( &p_sys->url, p_access->psz_location ) )
         goto exit_error;
 
     if( InitialiseCommandConnection( p_this, p_sys ) )
@@ -1207,8 +1206,7 @@ static void SDCreateItem( services_discovery_t *p_sd, int i, int i_fields, char 
 
     char *psz_name;
     asprintf( &psz_name, "%s: %s", psz_ctitle, psz_csubtitle );
-    p_item = input_item_NewWithType( VLC_OBJECT( p_sd ),
-        psz_url, psz_name, 0, NULL, 0,
+    p_item = input_item_NewWithType( psz_url, psz_name, 0, NULL, 0,
                                         -1, ITEM_TYPE_FILE );
         
     input_item_SetDescription( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 2 )) );
@@ -1282,7 +1280,7 @@ static void *SDRun( void *data )
 
     if ( !psz_backendurl )
     {
-        input_item_t *p_item = input_item_NewWithType( VLC_OBJECT( p_sd ),
+        input_item_t *p_item = input_item_NewWithType( 
             strdup( "mythnotavailable://localhost/" ), strdup( "Please set your Mythbackend URL in the preferences (Show All, under Input > Access Modules > MythTV) and restart VLC." ), 0, NULL, 0, -1, ITEM_TYPE_FILE );
         services_discovery_AddItem( p_sd, p_item, NULL );
         vlc_gc_decref( p_item );
