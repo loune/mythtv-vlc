@@ -1211,8 +1211,8 @@ static void SDCreateItem( services_discovery_t *p_sd, int i, int i_fields, char 
         
     input_item_SetDescription( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 2 )) );
     input_item_SetGenre( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 3 )) );
-    input_item_SetAlbum( p_item, strdup(psz_ctitle) );
     input_item_SetArtURL( p_item, psz_arturl );
+    // input_item_SetAlbum( p_item, strdup(psz_ctitle) ); // setting album disables arturl?
     input_item_SetDuration( p_item, ( atoll( myth_token( psz_params, i_len, 1 + i * i_fields + 24 ) ) - atoll( myth_token( psz_params, i_len, 1 + i * i_fields + 23 ) ) ) * 1000000 );
 
     char psz_datebuf[1000];
