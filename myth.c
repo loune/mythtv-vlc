@@ -552,21 +552,6 @@ static int InitialiseCommandConnection( vlc_object_t *p_access, access_sys_t *p_
 
         if (strstr(psz_url, p_sys->url.psz_path)) {
             /* found our program in all the recordings */
-            //char *psz_startdate;
-            //strftime(buffer, sizeof(buffer)-1, "%d-%m-%Y", atoi ( myth_token( psz_params, i_len, 1 + i * i_fields + 11 ) ));
-#if defined( HAVE_GMTIME_R )
-            struct tm tmres;
-            char   buffer[256];
-
-            time_t i_date = 0;
-            memset( buffer, 0, 256 );
-            if( gmtime_r( &i_date, &tmres ) &&
-                asctime_r( &tmres, buffer ) )
-            {
-                buffer[strlen( buffer)-1]= '\0';
-                psz_startdate = strdup( buffer );
-            }
-#endif
             char psz_datebuf[1000];
             time_t time;
             int64_t i_filesize = atoll( myth_token( psz_params, i_len, 1 + i * i_fields + 9 ) );
