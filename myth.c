@@ -113,9 +113,9 @@ static void GetCutList( access_t *, access_sys_t *, char*, char* );
 
 typedef struct _myth_version_t
 {
-	char *psz_version;
-	int i_version;
-	char *psz_token;
+	const char *psz_version;
+	const int i_version;
+	const char *psz_token;
 } myth_version_t;
 
 typedef struct _myth_sys_t
@@ -364,23 +364,26 @@ static int myth_Send( vlc_object_t *p_access, int fd, int *pi_len, char **ppsz_a
     
     free( psz_cmd );
 
-    while (true)
-    {
-        if ( myth_ReadCommand( p_access, fd, pi_len, ppsz_answer ) )
-        {
-            return VLC_EGENERIC;
-        }
+	if ( pi_len != NULL && ppsz_answer != NULL )
+	{
+		while (true)
+		{
+			if ( myth_ReadCommand( p_access, fd, pi_len, ppsz_answer ) )
+			{
+				return VLC_EGENERIC;
+			}
 
-        if ( !strcmp("BACKEND_MESSAGE", myth_token( *ppsz_answer, *pi_len, 0 ) ) )
-        {
-            msg_Info( p_access, "BACKEND -> %s ; %s ; %s ; %s", myth_token( *ppsz_answer, *pi_len, 1 ), myth_token( *ppsz_answer, *pi_len, 2 ), myth_token( *ppsz_answer, *pi_len, 3 ), myth_token( *ppsz_answer, *pi_len, 4 ) );
-            free( *ppsz_answer );
-        }
-        else
-        {
-            break;
-        }
-    }
+			if ( !strcmp("BACKEND_MESSAGE", myth_token( *ppsz_answer, *pi_len, 0 ) ) )
+			{
+				msg_Info( p_access, "BACKEND -> %s ; %s ; %s ; %s", myth_token( *ppsz_answer, *pi_len, 1 ), myth_token( *ppsz_answer, *pi_len, 2 ), myth_token( *ppsz_answer, *pi_len, 3 ), myth_token( *ppsz_answer, *pi_len, 4 ) );
+				free( *ppsz_answer );
+			}
+			else
+			{
+				break;
+			}
+		}
+	}
 
     return VLC_SUCCESS;
 }
@@ -497,7 +500,7 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
 
         if ( b_fd_data )
         {
-            if ( myth_Send( p_access, fd, &i_len, &psz_params, "ANN FileTransfer VLC_%s[]:[]myth://%s:%d/%s[]:[]Default", p_sys->sz_local_ip, url->psz_host, url->i_port, url->psz_path ) )
+            if ( myth_Send( p_access, fd, &i_len, &psz_params, "ANN FileTransfer VLC_%s 0[]:[]myth://%s:%d/%s[]:[]Default", p_sys->sz_local_ip, url->psz_host, url->i_port, url->psz_path ) )
             {
                 return 0;
             }
@@ -505,8 +508,16 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
             acceptreject = myth_token(psz_params, i_len, 0);
             if ( !strncmp( acceptreject, "OK", 2) )
             {
-                ((access_t*)p_access)->info.i_size = MAKEINT64( atoi( myth_token(psz_params, i_len, 3)), atoi( myth_token(psz_params, i_len, 2)));
-                msg_Info( p_access, "Stream starting %"PRId64" B", ((access_t*)p_access)->info.i_size );
+				if ( p_sys->version == &myth_version_24 )
+				{
+					((access_t*)p_access)->info.i_size = MAKEINT64( atoi( myth_token(psz_params, i_len, 3)), atoi( myth_token(psz_params, i_len, 2) ) );
+				}
+				else
+				{
+					((access_t*)p_access)->info.i_size = atoll( myth_token(psz_params, i_len, 2) );
+				}
+				
+				msg_Info( p_access, "Stream starting %"PRId64" B", ((access_t*)p_access)->info.i_size );
             }
             else
             {
@@ -778,10 +789,21 @@ static int _Seek( vlc_object_t *p_access, access_sys_t *p_sys, int64_t i_pos )
 
     char *psz_params;
     int i_plen;
-    if ( myth_Send( p_access, p_sys->fd_cmd, &i_plen, &psz_params, "QUERY_FILETRANSFER %s[]:[]SEEK[]:[]%d[]:[]%d[]:[]0[]:[]0[]:[]0", p_sys->myth.file_transfer_id, (int32_t)(i_pos >> 32), (int32_t)(i_pos)) )
-    {
-        return VLC_EGENERIC;
-    }
+
+	if ( p_sys->myth.version == &myth_version_24 )
+	{
+		if ( myth_Send( p_access, p_sys->fd_cmd, &i_plen, &psz_params, "QUERY_FILETRANSFER %s[]:[]SEEK[]:[]%d[]:[]%d[]:[]0[]:[]0[]:[]0", p_sys->myth.file_transfer_id, (int32_t)(i_pos >> 32), (int32_t)(i_pos)) )
+		{
+			return VLC_EGENERIC;
+		}
+	}
+	else
+	{
+		if ( myth_Send( p_access, p_sys->fd_cmd, &i_plen, &psz_params, "QUERY_FILETRANSFER %s[]:[]SEEK[]:[]%"PRId64"[]:[]0[]:[]0", p_sys->myth.file_transfer_id, i_pos) )
+		{
+			return VLC_EGENERIC;
+		}
+	}
 
     free( psz_params );
     return VLC_SUCCESS;
@@ -809,7 +831,11 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 {
     int i_read;
     int i_will_receive = 0;
+#ifdef WIN32
     int i_requestlen = 65536;
+#else
+    int i_requestlen = 131072;
+#endif
 
     int i_plen;
     char *psz_params;
@@ -822,12 +848,12 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
     if( p_access->info.b_eof )
         return 0;
 
-    msg_Dbg( p_access, "Read %d", i_len );
+    //msg_Dbg( p_access, "Read %d", i_len );
 
     /* pipeline reading, request new data when our buffer is half finished */
     if ( !p_sys->b_eofing && p_sys->i_data_to_be_read <= i_requestlen / 2 )
     {
-        msg_Dbg( p_access, "REQUEST_BLOCK %d", i_requestlen );
+        //msg_Dbg( p_access, "REQUEST_BLOCK %d", i_requestlen );
         if( myth_Send( VLC_OBJECT( p_access ), p_sys->fd_cmd, &i_plen, &psz_params, "QUERY_FILETRANSFER %s[]:[]REQUEST_BLOCK[]:[]%d", p_sys->myth.file_transfer_id, i_requestlen ) )
         {
             return VLC_EGENERIC;
@@ -835,7 +861,7 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
         
         i_will_receive = atoi( myth_token(psz_params, i_plen, 0) );
 
-        msg_Dbg( p_access, "i_will_receive %d", i_will_receive );
+        //msg_Dbg( p_access, "i_will_receive %d", i_will_receive );
         if ( i_will_receive <= 0 )
         {
             msg_Dbg( p_access, "SET EOFing" );
@@ -884,7 +910,7 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 
     i_read = net_Read( p_access, p_sys->fd_data, NULL, p_buffer, i_len, false );
     
-    msg_Dbg( p_access, "i_read %d", i_read );
+    //msg_Dbg( p_access, "i_read %d", i_read );
 
     if( i_read <= 0 )
     {
@@ -895,7 +921,7 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
     {
         p_access->info.i_pos += i_read;
         p_sys->i_data_to_be_read -= i_read;
-        msg_Dbg( p_access, "i_data_to_be_read %d", p_sys->i_data_to_be_read );
+        //msg_Dbg( p_access, "i_data_to_be_read %d", p_sys->i_data_to_be_read );
 
         /* update seekpoint to reflect the current position */
         if ( p_sys->i_titles > 0 )
