@@ -113,9 +113,9 @@ static void GetCutList( access_t *, access_sys_t *, char*, char* );
 
 typedef struct _myth_version_t
 {
-	const char *psz_version;
-	const int i_version;
-	const char *psz_token;
+    const char *psz_version;
+    const int i_version;
+    const char *psz_token;
 } myth_version_t;
 
 typedef struct _myth_sys_t
@@ -165,25 +165,25 @@ struct access_sys_t
 
 typedef struct _myth_recording_t
 {
-	char *psz_title;
-	char *psz_subtitle;
-	char *psz_description;
-	char *psz_genre;
-	char *psz_urlBase;
-	char *psz_url;
+    char *psz_title;
+    char *psz_subtitle;
+    char *psz_description;
+    char *psz_genre;
+    char *psz_urlBase;
+    char *psz_url;
 
-	char *psz_season;
-	char *psz_episode;
-	char *psz_category;
-	char *psz_chanNum;
-	char *psz_channelCallSign;
-	char *psz_channelName;
-	int64_t i_fileSize;
+    char *psz_season;
+    char *psz_episode;
+    char *psz_category;
+    char *psz_chanNum;
+    char *psz_channelCallSign;
+    char *psz_channelName;
+    int64_t i_fileSize;
 
-	time_t scheduledStartTime;
-	time_t startTime;
-	time_t endTime;
-	int duration;
+    time_t scheduledStartTime;
+    time_t startTime;
+    time_t endTime;
+    int64_t duration;
 } myth_recording_t;
 
 static myth_version_t myth_version_24 = { "0.24", 63, "3875641D" };
@@ -364,26 +364,26 @@ static int myth_Send( vlc_object_t *p_access, int fd, int *pi_len, char **ppsz_a
     
     free( psz_cmd );
 
-	if ( pi_len != NULL && ppsz_answer != NULL )
-	{
-		while (true)
-		{
-			if ( myth_ReadCommand( p_access, fd, pi_len, ppsz_answer ) )
-			{
-				return VLC_EGENERIC;
-			}
+    if ( pi_len != NULL && ppsz_answer != NULL )
+    {
+        while (true)
+        {
+            if ( myth_ReadCommand( p_access, fd, pi_len, ppsz_answer ) )
+            {
+                return VLC_EGENERIC;
+            }
 
-			if ( !strcmp("BACKEND_MESSAGE", myth_token( *ppsz_answer, *pi_len, 0 ) ) )
-			{
-				msg_Info( p_access, "BACKEND -> %s ; %s ; %s ; %s", myth_token( *ppsz_answer, *pi_len, 1 ), myth_token( *ppsz_answer, *pi_len, 2 ), myth_token( *ppsz_answer, *pi_len, 3 ), myth_token( *ppsz_answer, *pi_len, 4 ) );
-				free( *ppsz_answer );
-			}
-			else
-			{
-				break;
-			}
-		}
-	}
+            if ( !strcmp("BACKEND_MESSAGE", myth_token( *ppsz_answer, *pi_len, 0 ) ) )
+            {
+                msg_Info( p_access, "BACKEND -> %s ; %s ; %s ; %s", myth_token( *ppsz_answer, *pi_len, 1 ), myth_token( *ppsz_answer, *pi_len, 2 ), myth_token( *ppsz_answer, *pi_len, 3 ), myth_token( *ppsz_answer, *pi_len, 4 ) );
+                free( *ppsz_answer );
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
 
     return VLC_SUCCESS;
 }
@@ -427,7 +427,7 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
 {
     char *psz_params;
     int i_len;
-	myth_version_t* version = &myth_version_24;
+    myth_version_t* version = &myth_version_24;
 
     for ( int i = 0; i < 2; i++ )
     {
@@ -462,11 +462,11 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
 
         if ( !strncmp( acceptreject, "ACCEPT", 6 ) )
         {
-			int i_protocol_version = atoi( myth_token( psz_params, i_len, 1 ) );
+            int i_protocol_version = atoi( myth_token( psz_params, i_len, 1 ) );
             p_sys->version = version;
             msg_Info( p_access, "MythBackend is protocol version %d", i_protocol_version);
 
-			free( psz_params );
+            free( psz_params );
         }
         else
         {
@@ -475,27 +475,27 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
             int i_server_version = atoi( myth_token( psz_params, i_len, 1 ) );
             net_Close( fd );
             free( psz_params );
-			
-			int j = 0;
-			int i_myth_versions = sizeof( myth_versions ) / sizeof( myth_version_t* );
-			for ( ; j < i_myth_versions; j++ )
-			{
-				if( myth_versions[j]->i_version == i_server_version )
-				{
-					version = myth_versions[j];
-					break;
-				}
-			}
+            
+            int j = 0;
+            int i_myth_versions = sizeof( myth_versions ) / sizeof( myth_version_t* );
+            for ( ; j < i_myth_versions; j++ )
+            {
+                if( myth_versions[j]->i_version == i_server_version )
+                {
+                    version = myth_versions[j];
+                    break;
+                }
+            }
 
             if ( j == i_myth_versions )
             {
-				msg_Err( p_access, "MythBackend protocol %d is not supported.", i_server_version );
+                msg_Err( p_access, "MythBackend protocol %d is not supported.", i_server_version );
                 break;
             }
-			else
-			{
-				continue;
-			}
+            else
+            {
+                continue;
+            }
         }
 
         if ( b_fd_data )
@@ -508,16 +508,16 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
             acceptreject = myth_token(psz_params, i_len, 0);
             if ( !strncmp( acceptreject, "OK", 2) )
             {
-				if ( p_sys->version == &myth_version_24 )
-				{
-					((access_t*)p_access)->info.i_size = MAKEINT64( atoi( myth_token(psz_params, i_len, 3)), atoi( myth_token(psz_params, i_len, 2) ) );
-				}
-				else
-				{
-					((access_t*)p_access)->info.i_size = atoll( myth_token(psz_params, i_len, 2) );
-				}
-				
-				msg_Info( p_access, "Stream starting %"PRId64" B", ((access_t*)p_access)->info.i_size );
+                if ( p_sys->version == &myth_version_24 )
+                {
+                    ((access_t*)p_access)->info.i_size = MAKEINT64( atoi( myth_token(psz_params, i_len, 3)), atoi( myth_token(psz_params, i_len, 2) ) );
+                }
+                else
+                {
+                    ((access_t*)p_access)->info.i_size = atoll( myth_token(psz_params, i_len, 2) );
+                }
+                
+                msg_Info( p_access, "Stream starting %"PRId64" B", ((access_t*)p_access)->info.i_size );
             }
             else
             {
@@ -558,6 +558,39 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
     return 0;
 }
 
+
+static myth_recording_t ParseRecording( myth_version_t* version, char* psz_params, int i_len, int i_offset )
+{
+    myth_recording_t recording;
+    if ( version == &myth_version_24 )
+    {
+        recording.psz_title = myth_token( psz_params, i_len, i_offset + 0 );
+        recording.psz_subtitle = myth_token( psz_params, i_len, i_offset + 1 );
+        recording.psz_description = myth_token( psz_params, i_len, i_offset + 2 );
+        recording.psz_genre = myth_token( psz_params, i_len, i_offset + 3 );
+        recording.psz_channelName = myth_token( psz_params, i_len, i_offset + 7 );
+        recording.startTime = atoll( myth_token( psz_params, i_len, i_offset + 23 ) );
+        recording.endTime = atoll( myth_token( psz_params, i_len, i_offset + 24 ) );
+        recording.i_fileSize = atoll( myth_token( psz_params, i_len, i_offset + 9 ) );
+        recording.psz_urlBase = myth_token( psz_params, i_len, i_offset + 8 );
+    }
+    else
+    {
+        recording.psz_title = myth_token( psz_params, i_len, i_offset + 0 );
+        recording.psz_subtitle = myth_token( psz_params, i_len, i_offset + 1 );
+        recording.psz_description = myth_token( psz_params, i_len, i_offset + 2 );
+        recording.psz_genre = myth_token( psz_params, i_len, i_offset + 5 );
+        recording.psz_channelName = myth_token( psz_params, i_len, i_offset + 9 );
+        recording.startTime = atoll( myth_token( psz_params, i_len, i_offset + 25 ) );
+        recording.endTime = atoll( myth_token( psz_params, i_len, i_offset + 26 ) );
+        recording.i_fileSize = atoll( myth_token( psz_params, i_len, i_offset + 11 ) );
+        recording.psz_urlBase = myth_token( psz_params, i_len, i_offset + 10 );
+    }
+
+    recording.duration = recording.endTime - recording.startTime;
+
+    return recording;
+}
 
 
 static int InitialiseCommandConnection( vlc_object_t *p_access, access_sys_t *p_sys )
@@ -608,72 +641,57 @@ static int InitialiseCommandConnection( vlc_object_t *p_access, access_sys_t *p_
     int i_fields = (i_tokens-1) / i_rows;
     for ( int i = 0; i < i_rows; i++ )
     {
-		int i_offset = 1 + i * i_fields;
-        char* psz_url = myth_token( psz_params, i_len, i_offset + 8 );
+        int i_offset = 1 + i * i_fields;
+        char* psz_url;
+
+        if ( p_sys->myth.version == &myth_version_24 )
+        {
+            psz_url = myth_token( psz_params, i_len, i_offset + 8 );
+        }
+        else
+        {
+            psz_url = myth_token( psz_params, i_len, i_offset + 10 );
+        }
 
         input_item_t *p_item = NULL;
-
-        if (strstr(psz_url, p_sys->url.psz_path)) {
+        if (strstr(psz_url, p_sys->url.psz_path))
+        {
             /* found our program in all the recordings */
             char psz_datebuf[1000];
-			myth_recording_t recording;
-			
-			if ( p_sys->myth.version == &myth_version_24 )
-			{
-				recording.psz_title = myth_token( psz_params, i_len, i_offset + 0 );
-				recording.psz_subtitle = myth_token( psz_params, i_len, i_offset + 1 );
-				recording.psz_description = myth_token( psz_params, i_len, i_offset + 2 );
-				recording.psz_genre = myth_token( psz_params, i_len, i_offset + 3 );
-				recording.psz_channelName = myth_token( psz_params, i_len, i_offset + 7 );
-				recording.startTime = atoll( myth_token( psz_params, i_len, i_offset + 23 ) );
-				recording.endTime = atoll( myth_token( psz_params, i_len, i_offset + 24 ) );
-				recording.i_fileSize = atoll( myth_token( psz_params, i_len, i_offset + 9 ) );
-				recording.psz_urlBase = myth_token( psz_params, i_len, i_offset + 8 );
-			}
-			else
-			{
-				recording.psz_title = myth_token( psz_params, i_len, i_offset + 0 );
-				recording.psz_subtitle = myth_token( psz_params, i_len, i_offset + 1 );
-				recording.psz_description = myth_token( psz_params, i_len, i_offset + 2 );
-				recording.psz_genre = myth_token( psz_params, i_len, i_offset + 5 );
-				recording.psz_channelName = myth_token( psz_params, i_len, i_offset + 9 );
-				recording.startTime = atoll( myth_token( psz_params, i_len, i_offset + 25 ) );
-				recording.endTime = atoll( myth_token( psz_params, i_len, i_offset + 26 ) );
-				recording.i_fileSize = atoll( myth_token( psz_params, i_len, i_offset + 11 ) );
-				recording.psz_urlBase = myth_token( psz_params, i_len, i_offset + 10 );
-			}
-
+            myth_recording_t recording = ParseRecording( p_sys->myth.version, psz_params, i_len, i_offset );
+            
             input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("MythTV Backend Version"), "%s", p_sys->myth.version->psz_version );
             input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Myth Protocol"), "%d", p_sys->myth.version->i_version );
 
-			input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Title"), "%s", recording.psz_title );
-			input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Sub title"), "%s", recording.psz_subtitle );
-			input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Description"), "%s", recording.psz_description );
-			input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Category"), "%s", recording.psz_genre );
-			input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Channel"), "%s", recording.psz_channelName );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Title"), "%s", recording.psz_title );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Sub title"), "%s", recording.psz_subtitle );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Description"), "%s", recording.psz_description );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Category"), "%s", recording.psz_genre );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Channel"), "%s", recording.psz_channelName );
 
-			strftime( psz_datebuf, sizeof( psz_datebuf ), "%Y-%m-%d %I:%M%p", localtime( &recording.startTime ) );
-			input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Recording start"), "%s", psz_datebuf );
+            strftime( psz_datebuf, sizeof( psz_datebuf ), "%Y-%m-%d %I:%M%p", localtime( &recording.startTime ) );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Recording start"), "%s", psz_datebuf );
 
-			strftime( psz_datebuf, sizeof( psz_datebuf ), "%Y-%m-%d %I:%M%p", localtime( &recording.endTime ) );
-			input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Recording end"), "%s", psz_datebuf );
+            strftime( psz_datebuf, sizeof( psz_datebuf ), "%Y-%m-%d %I:%M%p", localtime( &recording.endTime ) );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Recording end"), "%s", psz_datebuf );
 
-			input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("File size"), "%"PRId64" MB", recording.i_fileSize / 1000000 );
-			input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Base name"), "%s", recording.psz_urlBase );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("File size"), "%"PRId64" MB", recording.i_fileSize / 1000000 );
+            input_Control( p_input, INPUT_ADD_INFO, _("MythTV"), _("Base name"), "%s", recording.psz_urlBase );
 
-			p_sys->psz_basename = strdup( recording.psz_urlBase );
+            p_sys->psz_basename = strdup( recording.psz_urlBase );
 
-			p_item = input_GetItem( p_input );
-			//input_item_SetDate( p_item, "test" );
+            p_item = input_GetItem( p_input );
+            //input_item_SetDate( p_item, "test" );
 
-			char* psz_ctitle;
-			asprintf( &psz_ctitle, "%s: %s", recording.psz_title, recording.psz_subtitle );
-			input_Control( p_input, INPUT_SET_NAME, psz_ctitle );
-			free( psz_ctitle );
+            char* psz_ctitle;
+            asprintf( &psz_ctitle, "%s: %s", recording.psz_title, recording.psz_subtitle );
+            input_Control( p_input, INPUT_SET_NAME, psz_ctitle );
+            free( psz_ctitle );
 
-			input_item_SetDescription( p_item, strdup( recording.psz_description ) );
+            input_item_SetDescription( p_item, strdup( recording.psz_description ) );
 
             //GetCutList( (access_t *) p_access, p_sys, channelid, recstart );
+
 
             break;
         }
@@ -684,6 +702,7 @@ static int InitialiseCommandConnection( vlc_object_t *p_access, access_sys_t *p_
 
     return VLC_SUCCESS;
 }
+
 
 
 static int parseURL( vlc_url_t *url, const char *path )
@@ -790,20 +809,20 @@ static int _Seek( vlc_object_t *p_access, access_sys_t *p_sys, int64_t i_pos )
     char *psz_params;
     int i_plen;
 
-	if ( p_sys->myth.version == &myth_version_24 )
-	{
-		if ( myth_Send( p_access, p_sys->fd_cmd, &i_plen, &psz_params, "QUERY_FILETRANSFER %s[]:[]SEEK[]:[]%d[]:[]%d[]:[]0[]:[]0[]:[]0", p_sys->myth.file_transfer_id, (int32_t)(i_pos >> 32), (int32_t)(i_pos)) )
-		{
-			return VLC_EGENERIC;
-		}
-	}
-	else
-	{
-		if ( myth_Send( p_access, p_sys->fd_cmd, &i_plen, &psz_params, "QUERY_FILETRANSFER %s[]:[]SEEK[]:[]%"PRId64"[]:[]0[]:[]0", p_sys->myth.file_transfer_id, i_pos) )
-		{
-			return VLC_EGENERIC;
-		}
-	}
+    if ( p_sys->myth.version == &myth_version_24 )
+    {
+        if ( myth_Send( p_access, p_sys->fd_cmd, &i_plen, &psz_params, "QUERY_FILETRANSFER %s[]:[]SEEK[]:[]%d[]:[]%d[]:[]0[]:[]0[]:[]0", p_sys->myth.file_transfer_id, (int32_t)(i_pos >> 32), (int32_t)(i_pos)) )
+        {
+            return VLC_EGENERIC;
+        }
+    }
+    else
+    {
+        if ( myth_Send( p_access, p_sys->fd_cmd, &i_plen, &psz_params, "QUERY_FILETRANSFER %s[]:[]SEEK[]:[]%"PRId64"[]:[]0[]:[]0", p_sys->myth.file_transfer_id, i_pos) )
+        {
+            return VLC_EGENERIC;
+        }
+    }
 
     free( psz_params );
     return VLC_SUCCESS;
@@ -895,7 +914,15 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
 
         if ( strncmp( psz_params, "ERROR", 6 ) )
         {
-            uint64_t i_newsize = atoll( myth_token( psz_params, i_plen, 1 + 9 ));
+            uint64_t i_newsize;
+            if ( p_sys->myth.version == &myth_version_24 )
+            {
+                i_newsize = atoll( myth_token( psz_params, i_plen, 1 + 9 ) );
+            }
+            else
+            {
+                i_newsize = atoll( myth_token( psz_params, i_plen, 1 + 11 ) );
+            }
 
             if ( p_access->info.i_size != i_newsize )
             {
@@ -1269,19 +1296,17 @@ static void SDCreateItem( services_discovery_t *p_sd, int i, int i_fields, char 
 {
     services_discovery_sys_t *p_sys  = p_sd->p_sys;
 
-    char *psz_urlbase = myth_token( psz_params, i_len, 1 + i * i_fields + 8 );
-    char *psz_ctitle = myth_token( psz_params, i_len, 1 + i * i_fields + 0 );
-    char *psz_csubtitle = myth_token( psz_params, i_len, 1 + i * i_fields + 1 );
+    myth_recording_t recording = ParseRecording( p_sys->myth.version, psz_params, i_len, 1 + i * i_fields + 0);
 
     char *psz_url;
-    if( strncmp( psz_urlbase, "myth://", 7 ) )
+    if( strncmp( recording.psz_urlBase, "myth://", 7 ) )
     {
         /* convert to fully qualified URL */
-        asprintf( &psz_url, "myth://%s:%d/%s", p_sys->backend_url.psz_host, p_sys->backend_url.i_port, psz_urlbase );
+        asprintf( &psz_url, "myth://%s:%d/%s", p_sys->backend_url.psz_host, p_sys->backend_url.i_port, recording.psz_urlBase );
     }
     else
     {
-        psz_url = strdup( psz_urlbase );
+        psz_url = strdup( recording.psz_urlBase );
     }
 
     char* psz_arturl;
@@ -1290,19 +1315,18 @@ static void SDCreateItem( services_discovery_t *p_sd, int i, int i_fields, char 
     input_item_t *p_item = NULL;
 
     char *psz_name;
-    asprintf( &psz_name, "%s: %s", psz_ctitle, psz_csubtitle );
+    asprintf( &psz_name, "%s: %s", recording.psz_title, recording.psz_subtitle );
     p_item = input_item_NewWithType( psz_url, psz_name, 0, NULL, 0,
                                         -1, ITEM_TYPE_FILE );
         
-    input_item_SetDescription( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 2 )) );
-    input_item_SetGenre( p_item, strdup(myth_token( psz_params, i_len, 1 + i * i_fields + 3 )) );
+    input_item_SetDescription( p_item, strdup( recording.psz_description ) );
+    input_item_SetGenre( p_item, strdup( recording.psz_genre ) );
     input_item_SetArtURL( p_item, psz_arturl );
     // input_item_SetAlbum( p_item, strdup(psz_ctitle) ); // setting album disables arturl?
-    input_item_SetDuration( p_item, ( atoll( myth_token( psz_params, i_len, 1 + i * i_fields + 24 ) ) - atoll( myth_token( psz_params, i_len, 1 + i * i_fields + 23 ) ) ) * 1000000 );
+    input_item_SetDuration( p_item, recording.duration * 1000000 );
 
     char psz_datebuf[1000];
-    time_t time;
-    time = atoll( myth_token( psz_params, i_len, 1 + i * i_fields + 10 ) );
+    time_t time = recording.startTime;
     strftime( psz_datebuf, sizeof( psz_datebuf ), "%Y-%m-%d %H:%M", localtime( &time ) );
     input_item_SetDate( p_item, psz_datebuf );
     input_item_SetArtist( p_item, psz_datebuf );
