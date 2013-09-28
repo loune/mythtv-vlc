@@ -1,12 +1,12 @@
-VLC MythTV access plugin Version 0.6 (for windows)
+VLC MythTV access plugin Version 0.8 (for windows)
 ==================================================
-by Loune Lam 31/07/2011
+by Loune Lam 28/09/2013
 
 To install it, just extract the zip and move libaccess_myth_plugin.dll to your VLC/plugins directory. Once you've installed the plugin, you can now open URLs that start with myth://
 
 Be sure to set your mythbackend URL in the VLC preferences for the Media Browser to work.
 
-This was tested to be working with VLC 1.1.11 and MythTV 0.24.
+This was tested to be working with VLC 2.1.0 and MythTV 0.26.
 
 More info:
 http://siphon9.net/loune/2010/11/mythtv-vlc-plugin-now-supports-vlc-1-1-5/

@@ -37,6 +37,7 @@
 #include <assert.h>
 
 #include <vlc_access.h>
+#include <vlc_dialog.h>
 #include <vlc_interface.h>
 
 #include <vlc_network.h>
@@ -693,6 +694,7 @@ static int InitialiseCommandConnection( vlc_object_t *p_access, access_sys_t *p_
             //GetCutList( (access_t *) p_access, p_sys, channelid, recstart );
 
 
+
             break;
         }
     }
@@ -702,6 +704,7 @@ static int InitialiseCommandConnection( vlc_object_t *p_access, access_sys_t *p_
 
     return VLC_SUCCESS;
 }
+
 
 
 
@@ -927,7 +930,6 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
             if ( p_access->info.i_size != i_newsize )
             {
                 p_access->info.i_size = i_newsize;
-                p_access->info.i_update |= INPUT_UPDATE_SIZE;
                 msg_Dbg( p_access, "new file size %"PRId64" position %"PRId64, i_newsize, p_access->info.i_pos );
             }
         }
