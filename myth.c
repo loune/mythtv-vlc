@@ -155,6 +155,7 @@ struct access_sys_t
 
     int        fd_cmd;
     int        fd_data;
+    int64_t    i_toseek;
     int        i_data_to_be_read;
     mtime_t    i_filesize_last_updated;
     char      *psz_basename;
@@ -744,6 +745,7 @@ static int InOpen( vlc_object_t *p_this )
     STANDARD_READ_ACCESS_INIT
     p_sys->fd_cmd = -1;
     p_sys->fd_data = -1;
+    p_sys->i_toseek = -1;
     p_sys->i_data_to_be_read = 0;
     p_sys->i_filesize_last_updated = 0;
     p_sys->b_eofing = false;
@@ -834,13 +836,10 @@ static int _Seek( vlc_object_t *p_access, access_sys_t *p_sys, int64_t i_pos )
 static int Seek( access_t *p_access, uint64_t i_pos )
 {
     access_sys_t *p_sys = p_access->p_sys;
-    int val = _Seek( (vlc_object_t *)p_access, p_access->p_sys, i_pos );
-    if( val )
-        return val;
 
+    p_sys->i_toseek = i_pos;
     p_sys->b_eofing = false;
     p_access->info.b_eof = false;
-    p_access->info.i_pos = i_pos;
 
     return VLC_SUCCESS;
 }
@@ -870,11 +869,20 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
     if( p_access->info.b_eof )
         return 0;
 
-    //msg_Dbg( p_access, "Read %d", i_len );
+    //msg_Dbg( p_access, "Want Read %d", i_len );
 
     /* pipeline reading, request new data when our buffer is half finished */
-    if ( !p_sys->b_eofing && p_sys->i_data_to_be_read <= i_requestlen / 2 )
+    if ( !p_sys->b_eofing && p_sys->i_data_to_be_read <= i_requestlen / 2 &&
+        ( p_sys->i_toseek == -1 || (p_sys->i_toseek != -1 && p_sys->i_data_to_be_read == 0) ) )
     {
+        if (p_sys->i_toseek != -1) {
+            int val = _Seek( (vlc_object_t *)p_access, p_access->p_sys, p_sys->i_toseek );
+            if( val )
+                return val;
+            p_access->info.i_pos = p_sys->i_toseek;
+            p_sys->i_toseek = -1;
+        }
+
         //msg_Dbg( p_access, "REQUEST_BLOCK %d", i_requestlen );
         if( myth_Send( VLC_OBJECT( p_access ), p_sys->fd_cmd, &i_plen, &psz_params, "QUERY_FILETRANSFER %s[]:[]REQUEST_BLOCK[]:[]%d", p_sys->myth.file_transfer_id, i_requestlen ) )
         {
@@ -970,6 +978,8 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
             p_access->info.i_update |= INPUT_UPDATE_SEEKPOINT;
         }
     }
+
+    //msg_Dbg( p_access, "Got Read %d", i_len );
         
 
     return i_read;
@@ -1107,10 +1117,6 @@ static int Control( access_t *p_access, int i_query, va_list args )
     }
     return VLC_SUCCESS;
 }
-
-
-
-
 
 
 
