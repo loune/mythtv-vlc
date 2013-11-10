@@ -89,8 +89,6 @@ vlc_module_begin()
 
         add_string( "mythbackend-url", NULL, 
                     SERVER_URL_TEXT, SERVER_URL_LONGTEXT, false )
-        add_string( "mythbackend-version", NULL, 
-                    SERVER_VERSION_TEXT, SERVER_VERSION_LONGTEXT, false )
 
         set_capability( "services_discovery", 0 )
         set_callbacks( SDOpen, SDClose )
@@ -155,7 +153,6 @@ struct access_sys_t
 
     int        fd_cmd;
     int        fd_data;
-    int64_t    i_toseek;
     int        i_data_to_be_read;
     mtime_t    i_filesize_last_updated;
     char      *psz_basename;
@@ -431,7 +428,7 @@ static int myth_Connect( vlc_object_t *p_access, myth_sys_t *p_sys, vlc_url_t* u
 {
     char *psz_params;
     int i_len;
-    myth_version_t* version = &myth_version_24;
+    myth_version_t* version = &myth_version_27;
 
     for ( int i = 0; i < 2; i++ )
     {
@@ -763,7 +760,6 @@ static int InOpen( vlc_object_t *p_this )
     STANDARD_READ_ACCESS_INIT
     p_sys->fd_cmd = -1;
     p_sys->fd_data = -1;
-    p_sys->i_toseek = -1;
     p_sys->i_data_to_be_read = 0;
     p_sys->i_filesize_last_updated = 0;
     p_sys->b_eofing = false;
@@ -832,30 +828,57 @@ static int _Seek( vlc_object_t *p_access, access_sys_t *p_sys, int64_t i_pos )
     char *psz_params;
     int i_plen;
 
+    // close and reopen
+    if ( p_sys->fd_data != -1 )
+        net_Close( p_sys->fd_data );
+
+    if ( p_sys->fd_cmd != -1 )
+        net_Close( p_sys->fd_cmd );
+
+    p_sys->i_data_to_be_read = 0;
+    p_sys->i_filesize_last_updated = 0;
+
+    if( InitialiseCommandConnection( p_access, p_sys ) )
+        goto exit_error;
+
+    p_sys->fd_data = myth_Connect( p_access, &p_sys->myth, &p_sys->url, true );
+    if( !p_sys->fd_data )
+        goto exit_error;
+
     if ( p_sys->myth.version == &myth_version_24 )
     {
         if ( myth_Send( p_access, p_sys->fd_cmd, &i_plen, &psz_params, "QUERY_FILETRANSFER %s[]:[]SEEK[]:[]%d[]:[]%d[]:[]0[]:[]0[]:[]0", p_sys->myth.file_transfer_id, (int32_t)(i_pos >> 32), (int32_t)(i_pos)) )
         {
-            return VLC_EGENERIC;
+            goto exit_error;
         }
     }
     else
     {
         if ( myth_Send( p_access, p_sys->fd_cmd, &i_plen, &psz_params, "QUERY_FILETRANSFER %s[]:[]SEEK[]:[]%"PRId64"[]:[]0[]:[]0", p_sys->myth.file_transfer_id, i_pos) )
         {
-            return VLC_EGENERIC;
+            goto exit_error;
         }
     }
 
     free( psz_params );
     return VLC_SUCCESS;
+
+exit_error:
+    free( psz_params );
+    InClose( p_access );
+
+    return VLC_EGENERIC;
 }
 
 static int Seek( access_t *p_access, uint64_t i_pos )
 {
     access_sys_t *p_sys = p_access->p_sys;
 
-    p_sys->i_toseek = i_pos;
+    int val = _Seek( (vlc_object_t *)p_access, p_access->p_sys, i_pos );
+    if( val )
+        return val;
+
+    p_access->info.i_pos = i_pos;
     p_sys->b_eofing = false;
     p_access->info.b_eof = false;
 
@@ -890,17 +913,8 @@ static ssize_t Read( access_t *p_access, uint8_t *p_buffer, size_t i_len )
     //msg_Dbg( p_access, "Want Read %d", i_len );
 
     /* pipeline reading, request new data when our buffer is half finished */
-    if ( !p_sys->b_eofing && p_sys->i_data_to_be_read <= i_requestlen / 2 &&
-        ( p_sys->i_toseek == -1 || (p_sys->i_toseek != -1 && p_sys->i_data_to_be_read == 0) ) )
+    if ( !p_sys->b_eofing && p_sys->i_data_to_be_read <= i_requestlen / 2 )
     {
-        if (p_sys->i_toseek != -1) {
-            int val = _Seek( (vlc_object_t *)p_access, p_access->p_sys, p_sys->i_toseek );
-            if( val )
-                return val;
-            p_access->info.i_pos = p_sys->i_toseek;
-            p_sys->i_toseek = -1;
-        }
-
         //msg_Dbg( p_access, "REQUEST_BLOCK %d", i_requestlen );
         if( myth_Send( VLC_OBJECT( p_access ), p_sys->fd_cmd, &i_plen, &psz_params, "QUERY_FILETRANSFER %s[]:[]REQUEST_BLOCK[]:[]%d", p_sys->myth.file_transfer_id, i_requestlen ) )
         {
